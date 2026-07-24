@@ -42,6 +42,32 @@ Three decisions are worth knowing before you build on it:
 - **Redemptions snapshot their terms.** Changing a program's threshold or reward copy
   applies to in-progress cards immediately, but never rewrites past redemptions.
 
+## Service layer
+
+`RewardService` implements the rules above as a static-async service, operating on an
+`AsyncSession` and this package's own models only -- it never imports the host app, same
+as the models.
+
+```python
+from hour_rewards.service import RewardService, RewardServiceError
+
+program = await RewardService.create_or_update_reward_program(session, create_model)
+summary = await RewardService.get_punch_card_summary(session, user_id, venue_id)  # or None
+history = await RewardService.get_punch_history(session, user_id, venue_id)
+code = await RewardService.generate_redemption_code(session, user_id, venue_id)  # raises RewardServiceError if under threshold
+redemption = await RewardService.redeem_code(session, token, redeemed_by_owner_id)
+```
+
+Authentication and authorization -- who the current user is, whether they own the venue
+scanning a code -- are the host's job, done before calling in. The one exception is
+`redeem_code`: a token alone doesn't carry its venue, so call
+`RewardService.get_redemption_code_venue_id(session, token)` first to resolve it and run
+your own authorization check, then call `redeem_code`.
+
+`RewardServiceError` (a `ValueError`) is raised for rule violations: an under-threshold
+card, an already-redeemed or wrong-cycle code, a missing program. Hosts typically map it
+to a 409 Conflict.
+
 ## Host contract
 
 The rewards tables reference tables the host application owns, and SQLAlchemy resolves

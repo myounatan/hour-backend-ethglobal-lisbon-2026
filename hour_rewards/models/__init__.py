@@ -1,5 +1,12 @@
 from hour_rewards.models.punch_card import PunchCard, PunchCardBase
 from hour_rewards.models.punch_event import PunchEvent, PunchEventStatus
+from hour_rewards.models.responses import (
+    PunchCardSummaryResponse,
+    RewardHistoryEventResponse,
+    RewardHistoryEventType,
+    RewardRedemptionCodeResponse,
+    RewardRedemptionResponse,
+)
 from hour_rewards.models.reward_program import (
     RewardProgram,
     RewardProgramBase,
@@ -16,8 +23,11 @@ from hour_rewards.models.reward_redemption_code import (
 __all__ = [
     "PunchCard",
     "PunchCardBase",
+    "PunchCardSummaryResponse",
     "PunchEvent",
     "PunchEventStatus",
+    "RewardHistoryEventResponse",
+    "RewardHistoryEventType",
     "RewardProgram",
     "RewardProgramBase",
     "RewardProgramCreate",
@@ -25,5 +35,7 @@ __all__ = [
     "RewardProgramUpdateRequest",
     "RewardRedemption",
     "RewardRedemptionCode",
+    "RewardRedemptionCodeResponse",
     "RewardRedemptionCodeStatus",
+    "RewardRedemptionResponse",
 ]

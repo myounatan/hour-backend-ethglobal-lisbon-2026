@@ -10,8 +10,11 @@ from hour_rewards.base import TimestampedModel, utc_now, value_enum
 from hour_rewards.models import (
     PunchCard,
     PunchCardBase,
+    PunchCardSummaryResponse,
     PunchEvent,
     PunchEventStatus,
+    RewardHistoryEventResponse,
+    RewardHistoryEventType,
     RewardProgram,
     RewardProgramBase,
     RewardProgramCreate,
@@ -19,16 +22,22 @@ from hour_rewards.models import (
     RewardProgramUpdateRequest,
     RewardRedemption,
     RewardRedemptionCode,
+    RewardRedemptionCodeResponse,
     RewardRedemptionCodeStatus,
+    RewardRedemptionResponse,
 )
+from hour_rewards.service import RewardService, RewardServiceError
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "PunchCard",
     "PunchCardBase",
+    "PunchCardSummaryResponse",
     "PunchEvent",
     "PunchEventStatus",
+    "RewardHistoryEventResponse",
+    "RewardHistoryEventType",
     "RewardProgram",
     "RewardProgramBase",
     "RewardProgramCreate",
@@ -36,7 +45,11 @@ __all__ = [
     "RewardProgramUpdateRequest",
     "RewardRedemption",
     "RewardRedemptionCode",
+    "RewardRedemptionCodeResponse",
     "RewardRedemptionCodeStatus",
+    "RewardRedemptionResponse",
+    "RewardService",
+    "RewardServiceError",
     "TimestampedModel",
     "__version__",
     "utc_now",
