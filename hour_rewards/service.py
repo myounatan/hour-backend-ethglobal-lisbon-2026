@@ -295,11 +295,10 @@ class RewardService:
         from the venue's own row (:mod:`hour_rewards.host_queries`) rather than taken from the
         caller, so a submission cannot describe the venue it claims to be from.
 
-        A receipt this venue has already seen is refused rather than filed a second time: its
-        ``dedupe_hash`` is taken, which is what makes a receipt single-use -- and also means
-        resubmitting one that was already judged can't shop for a better verdict. The one
-        refusal that isn't filed is a verifier that couldn't answer at all, since an outage
-        should cost a retry and not the receipt. Nothing here raises for a refusal; read
+        A receipt that earned a punch at this venue is refused on future submissions: its
+        ``dedupe_hash`` is spent, which keeps a receipt single-use even across accounts.
+        Refused receipts are filed but retain their second chance, while a verifier that
+        could not answer is not filed at all. Nothing here raises for a refusal; read
         ``approved`` and ``reason``.
         """
         program = await RewardService.get_reward_program_for_venue(session, venue_id)
@@ -316,7 +315,9 @@ class RewardService:
                 session, user_id, venue_id, verdict, punch_event=None
             )
 
-        if await RewardService._receipt_already_claimed(session, venue_id, verdict.dedupe_hash):
+        if await RewardService._receipt_already_earned_a_punch(
+            session, venue_id, verdict.dedupe_hash
+        ):
             return await RewardService._submission_response(
                 session, user_id, venue_id, verdict, punch_event=None, reason=DUPLICATE_RECEIPT
             )
@@ -361,13 +362,15 @@ class RewardService:
         )
 
     @staticmethod
-    async def _receipt_already_claimed(
+    async def _receipt_already_earned_a_punch(
         session: AsyncSession, venue_id: UUID, dedupe_hash: str
     ) -> bool:
-        """Whether this venue has seen this receipt before, under any user's card."""
+        """Whether this receipt has already earned a punch at this venue."""
         result = await session.execute(
             select(PunchEvent.id).where(
-                PunchEvent.venue_id == venue_id, PunchEvent.dedupe_hash == dedupe_hash
+                PunchEvent.venue_id == venue_id,
+                PunchEvent.dedupe_hash == dedupe_hash,
+                PunchEvent.status == PunchEventStatus.VERIFIED,
             )
         )
         return result.first() is not None

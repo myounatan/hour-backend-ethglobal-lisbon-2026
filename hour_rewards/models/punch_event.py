@@ -4,7 +4,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 from uuid import UUID, uuid4
 
-from sqlmodel import Field, Relationship, UniqueConstraint
+from sqlalchemy import Index, text
+from sqlmodel import Field, Relationship
 
 from hour_rewards.base import LedgerProofModel, TimestampedModel, value_enum
 
@@ -34,9 +35,11 @@ class PunchEvent(LedgerProofModel, TimestampedModel, table=True):
     which attested inference decided each one.
 
     Idempotency rests on ``dedupe_hash`` -- a normalized hash of the extracted receipt
-    fields -- which is unique per venue, so the same receipt cannot be redeemed twice
-    even if it's submitted from a different account. ``cycle_number`` freezes which of
-    the card's cycles this punch belongs to, so history survives every reset.
+    fields. It is unique per venue among ``VERIFIED`` rows, so the same receipt cannot
+    earn a punch twice even if it is submitted from a different account. Refused
+    receipts may be photographed again, retaining each attempt for review.
+    ``cycle_number`` freezes which of the card's cycles this punch belongs to, so history
+    survives every reset.
 
     The host app owns the image table this points at, so it is responsible for importing
     its ``UserImage`` model somewhere before the first query (see README, "Host contract").
@@ -46,11 +49,19 @@ class PunchEvent(LedgerProofModel, TimestampedModel, table=True):
     """
 
     __tablename__ = "punch_events"
-    __table_args__ = (UniqueConstraint("venue_id", "dedupe_hash", name="uq_venue_receipt_dedupe"),)
+    __table_args__ = (
+        Index(
+            "uq_venue_verified_receipt_dedupe",
+            "venue_id",
+            "dedupe_hash",
+            unique=True,
+            postgresql_where=text("status = 'verified'"),
+        ),
+    )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     punch_card_id: UUID = Field(foreign_key="punch_cards.id", ondelete="CASCADE", index=True)
-    # Denormalized from the card so the dedupe constraint above doesn't need a join.
+    # Denormalized from the card so the verified-receipt index above doesn't need a join.
     venue_id: UUID = Field(foreign_key="venues.id", ondelete="CASCADE")
     cycle_number: int = Field(default=1)
 

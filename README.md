@@ -44,10 +44,11 @@ Three decisions are worth knowing before you build on it:
 
 - **Cards are never replaced.** Redeeming bumps `cycle_number` and resets `punch_count`;
   every punch keeps the cycle it was earned under, so history survives each reset.
-- **Punches are idempotent per venue.** `punch_events.dedupe_hash` is unique per venue, so
-  the same receipt can't be claimed twice, even from a different account. `punch_count` is
-  recounted from the cycle's verified events rather than incremented, so a retried request
-  can't inflate a card either.
+- **Verified punches are idempotent per venue.** A verified `punch_events.dedupe_hash` is
+  unique per venue, so the same receipt can't earn a punch twice, even from a different
+  account. Refused attempts remain on file but can be retried. `punch_count` is recounted
+  from the cycle's verified events rather than incremented, so a retried request can't
+  inflate a card either.
 - **Redemptions snapshot their terms.** Changing a program's threshold or reward copy
   applies to in-progress cards immediately, but never rewrites past redemptions.
 
@@ -210,12 +211,13 @@ that verdict is reached:
   refusal.
 - **A receipt passes or it doesn't.** There is no review queue: below `min_confidence` (0.75 by
   default) a submission is refused as `low_confidence`, so the answer to a blurry photo is a
-  better photo. The one refusal that isn't final is `verifier_unavailable` — an unreachable or
-  unconfigured endpoint costs a retry, not the receipt, so no row is filed and the hash stays
-  unclaimed.
-- **A receipt is single-use per venue.** `punch_events.dedupe_hash` is built from the receipt's
-  own number, or its date and total when it has no number, and is unique per venue — so the
-  same receipt can't be claimed twice, or claimed from a second account.
+  better photo. Refused attempts are retained for review, but the same receipt can be
+  photographed again. `verifier_unavailable` is not filed at all, since an unreachable or
+  unconfigured endpoint should cost a retry and not the receipt.
+- **A verified receipt is single-use per venue.** `punch_events.dedupe_hash` is built from the
+  receipt's own number, or its date and total when it has no number. A partial unique index
+  applies it to verified rows, so a receipt cannot earn a second punch or be claimed from a
+  second account, while a refused attempt can be retried.
 
 A host enables it the same way as the ledger, once at startup, and nothing here reads the
 host's environment:

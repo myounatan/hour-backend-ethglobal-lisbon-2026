@@ -20,7 +20,10 @@ reward_redemption_codes -> reward_redemptions) since each references the previou
 The Hedera columns and the custodial ``hedera_accounts`` table are a separate pair of
 operations (:func:`upgrade_hedera` / :func:`downgrade_hedera`), so a host can adopt the
 punch cards without the ledger; the 0G verification columns are a third pair
-(:func:`upgrade_zg` / :func:`downgrade_zg`), for the same reason.
+(:func:`upgrade_zg` / :func:`downgrade_zg`), for the same reason. The receipt-retry
+index is a fourth pair (:func:`upgrade_receipt_retry` / :func:`downgrade_receipt_retry`);
+its downgrade can fail after multiple attempts of one rejected receipt have been filed,
+because it restores the original, stricter unique constraint.
 Requires the ``migrations`` extra: ``pip install hour-rewards-sdk[migrations]``.
 """
 
@@ -119,10 +122,16 @@ def upgrade() -> None:
             sa.ForeignKeyConstraint(["venue_id"], ["venues.id"], ondelete="CASCADE"),
             sa.ForeignKeyConstraint(["receipt_image_id"], ["user_images.id"], ondelete="SET NULL"),
             sa.PrimaryKeyConstraint("id"),
-            sa.UniqueConstraint("venue_id", "dedupe_hash", name="uq_venue_receipt_dedupe"),
         )
         op.create_index(
             "ix_punch_events_punch_card_id", PUNCH_EVENTS, ["punch_card_id"], unique=False
+        )
+        op.create_index(
+            "uq_venue_verified_receipt_dedupe",
+            PUNCH_EVENTS,
+            ["venue_id", "dedupe_hash"],
+            unique=True,
+            postgresql_where=sa.text("status = 'verified'"),
         )
 
     if not inspector.has_table(REDEMPTION_CODES):
@@ -291,6 +300,50 @@ def downgrade_zg() -> None:
     for column in ("zg_request_id", "zg_provider_address", "zg_tee_verified"):
         if column in columns:
             op.drop_column(PUNCH_EVENTS, column)
+
+
+def upgrade_receipt_retry() -> None:
+    """Allow rejected receipt attempts to be retried without spending the receipt hash."""
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if not inspector.has_table(PUNCH_EVENTS):
+        return
+
+    constraint_names = {
+        constraint["name"] for constraint in inspector.get_unique_constraints(PUNCH_EVENTS)
+    }
+    if "uq_venue_receipt_dedupe" in constraint_names:
+        op.drop_constraint("uq_venue_receipt_dedupe", PUNCH_EVENTS, type_="unique")
+
+    index_names = {index["name"] for index in inspector.get_indexes(PUNCH_EVENTS)}
+    if "uq_venue_verified_receipt_dedupe" not in index_names:
+        op.create_index(
+            "uq_venue_verified_receipt_dedupe",
+            PUNCH_EVENTS,
+            ["venue_id", "dedupe_hash"],
+            unique=True,
+            postgresql_where=sa.text("status = 'verified'"),
+        )
+
+
+def downgrade_receipt_retry() -> None:
+    """Restore receipt-wide deduplication, if retry rows do not violate it."""
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if not inspector.has_table(PUNCH_EVENTS):
+        return
+
+    index_names = {index["name"] for index in inspector.get_indexes(PUNCH_EVENTS)}
+    if "uq_venue_verified_receipt_dedupe" in index_names:
+        op.drop_index("uq_venue_verified_receipt_dedupe", table_name=PUNCH_EVENTS)
+
+    constraint_names = {
+        constraint["name"] for constraint in inspector.get_unique_constraints(PUNCH_EVENTS)
+    }
+    if "uq_venue_receipt_dedupe" not in constraint_names:
+        op.create_unique_constraint(
+            "uq_venue_receipt_dedupe", PUNCH_EVENTS, ["venue_id", "dedupe_hash"]
+        )
 
 
 def downgrade_hedera() -> None:

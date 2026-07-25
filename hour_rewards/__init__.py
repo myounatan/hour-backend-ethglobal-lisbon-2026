@@ -82,7 +82,7 @@ from hour_rewards.service import (
 )
 from hour_rewards.zg import ReceiptVerdict, ZGConfig, configure_zg, get_zg_config, verify_receipt
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 __all__ = [
     "DEFAULT_REDEMPTION_TTL_SECONDS",
