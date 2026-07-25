@@ -8,7 +8,31 @@ that venue staff scan. This package owns that data model — the tables, their c
 and the rules baked into them — so it can be dropped into any FastAPI/SQLModel app that
 already has users, venues and venue owners.
 
-Built for ETHGlobal Lisbon 2026, and consumed by the [Hour](https://hourapp.co) mobile app.
+Built for ETHGlobal Lisbon 2026, and consumed by the [Hour](https://get-hour.com) mobile app.
+
+## HOW TO TEST
+
+Prerequisites
+0. Have 2 iPhones available (one as "user", and one as "owner")
+1. Download Testflight from the App Store on both
+2. Click this link to get Hour (must have Testflight first) https://testflight.apple.com/join/RKZBgES3
+3. Sign in required on both devices (can be the same google or apple account, doesn't matter)
+
+**iPhone A:** Getting a punch on your punch card
+0a. Make sure you are on Lisbon location (top left on home page)
+0b. Search for "Kazi Eatery", and click it
+1. Click the rewards card "view rewards", you should have 4 stars already punched in
+2. Take a picture of this sample receipt here: https://storage.googleapis.com/hour-venue-images/kazi_eatery_demo_receipt.png
+3. It should register you a fifth star/punch
+4. Click "show QR code"
+
+**iPhone B:** Scan to redeem QR code rewards
+0. Follow steps 0 above
+1. Click the three dots menu > Scan QR Code
+2. Scan the QR code on iPhone A
+3. ???
+4. Profit
+5. iPhone B shows a confirmation screen, while iPhone A should show the reward was redeemed
 
 ## Install
 
