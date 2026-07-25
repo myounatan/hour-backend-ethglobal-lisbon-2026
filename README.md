@@ -78,6 +78,45 @@ your own authorization check, then call `redeem_code`.
 card, an already-redeemed or wrong-cycle code, a missing program. Hosts typically map it
 to a 409 Conflict.
 
+## Receipt photos — what an upload endpoint does
+
+A punch starts as a photo, so `hour_rewards.receipt_photo` covers that whole step: what an
+upload has to be, reading it, and judging it. A host's endpoint authenticates the caller and
+hands the bytes over.
+
+```python
+from hour_rewards import MAX_RECEIPT_IMAGE_BYTES, submit_receipt_photo
+
+raw = await file.read(MAX_RECEIPT_IMAGE_BYTES + 1)  # one byte past the cap is enough
+result = await submit_receipt_photo(session, user_id=user.id, venue_id=venue_id, image=raw)
+```
+
+JPEG, PNG and WebP, up to `MAX_RECEIPT_IMAGE_BYTES` (6 MB), taken from the bytes' own magic
+numbers rather than from what the upload claims to be. Three exceptions, and everything else is
+a verdict rather than a failure: `ReceiptImageTooLargeError` and `ReceiptImageError` are a host's
+413 and 400, and `ReceiptScanError` its 502 — that last one means the receipt was never judged,
+so retrying the same photo is fair.
+
+The photo is read and dropped. A punch keeps the verdict, the receipt's dedupe hash and the
+attestation of the run that decided it (below), never the image — pass `receipt_image_id` to
+`RewardService.submit_receipt` yourself if your host stores uploads and wants them linked.
+
+**Reading it is the one step handed back**, because a host running receipt photos already has a
+document pipeline and this package has no business holding a second set of OCR credentials. A
+host installs its reader once at startup, as it configures the other two layers:
+
+```python
+from hour_rewards import configure_receipt_reader
+
+async def read_receipt_text(image: bytes) -> str:  # Azure, Textract, Tesseract, ...
+    return await my_document_pipeline(image)
+
+configure_receipt_reader(read_receipt_text)
+```
+
+Until one is installed, every photo raises `ReceiptScanError`. A host that already has the text
+skips all of this and calls `RewardService.submit_receipt` directly.
+
 ## 0G — how a receipt becomes a punch
 
 Punches aren't handed out by staff: a user photographs their receipt and it has to pass
@@ -86,18 +125,15 @@ an OpenAI-compatible endpoint served by nodes that run in a TDX enclave and **si
 response** from inside it — so what comes back is not just an answer but a checkable one, and
 what makes it checkable is kept on the punch.
 
-OCR is the host's job. This package takes the text, because a host running receipt photos
-already has a document pipeline and shouldn't hand a second set of credentials to a package
-that only needs the words. What the text is checked against — the venue's name and address —
-is read from its `venues` row rather than passed in, so a submission can't describe the venue
-it claims to come from:
+Judgement starts from the text, whether a photo was read for it (above) or a host had it
+already. What the text is checked against — the venue's name and address — is read from its
+`venues` row rather than passed in, so a submission can't describe the venue it claims to come
+from:
 
 ```python
 from hour_rewards.service import RewardService
 
-result = await RewardService.submit_receipt(
-    session, user_id, venue_id, receipt_text, receipt_image_id=image.id
-)
+result = await RewardService.submit_receipt(session, user_id, venue_id, receipt_text)
 result.approved            # True -> the card moved
 result.reason              # "venue_mismatch", "duplicate_receipt", "low_confidence", ...
 result.summary             # progress after the punch, ready to return to a client
