@@ -15,7 +15,7 @@ from hour_rewards.hedera.config import (
     configure_hedera,
     get_hedera_config,
 )
-from hour_rewards.hedera.ledger import HederaLedger
+from hour_rewards.hedera.ledger import DEFAULT_RECONCILE_LIMIT, HederaLedger
 from hour_rewards.hedera.metadata import (
     MetadataTooLargeError,
     build_card_metadata,
@@ -37,6 +37,7 @@ def close_hedera_clients() -> None:
 
 
 __all__ = [
+    "DEFAULT_RECONCILE_LIMIT",
     "HederaConfig",
     "HederaLedger",
     "MAX_METADATA_BYTES",

@@ -42,7 +42,9 @@ Three decisions are worth knowing before you build on it:
 - **Cards are never replaced.** Redeeming bumps `cycle_number` and resets `punch_count`;
   every punch keeps the cycle it was earned under, so history survives each reset.
 - **Punches are idempotent per venue.** `punch_events.dedupe_hash` is unique per venue, so
-  the same receipt can't be claimed twice, even from a different account.
+  the same receipt can't be claimed twice, even from a different account. `punch_count` is
+  recounted from the cycle's verified events rather than incremented, so a retried request
+  can't inflate a card either.
 - **Redemptions snapshot their terms.** Changing a program's threshold or reward copy
   applies to in-progress cards immediately, but never rewrites past redemptions.
 
@@ -101,8 +103,11 @@ Four decisions worth knowing:
   and its key stored Fernet-encrypted in `hedera_accounts`. Topic messages carry a salted
   hash of the user id, never the id itself.
 - **The ledger mirrors the database; it never gates it.** Every call is best-effort: a
-  failure is logged, the `hedera_*` columns stay null, and the next punch retries what's
-  missing. A Hedera outage cannot fail a punch or a redemption.
+  failure is logged and the `hedera_*` columns stay null. A Hedera outage cannot fail a punch
+  or a redemption. What keeps that from losing anything is that each id is committed the
+  moment it exists — a token before its topic is attempted, a serial before it is transferred
+  — so nothing on the ledger is missing from the database, and what's left undone is a null
+  column `HederaLedger.reconcile()` can finish later.
 
 A host enables it by handing over credentials once at startup; nothing here reads the
 host's environment:
@@ -139,6 +144,19 @@ async def punch_card_nft_metadata(punch_card_id: UUID, db: DBSession) -> dict:
 `record_verified_punch` mints the card on the first punch and then publishes each one, and
 `redeem_code` publishes the claim. `HederaLedger` is available directly if a host wants to
 drive it itself.
+
+After an outage, one pass catches everything up — programs with no collection or topic, cards
+with no NFT or still holding it in the treasury, verified punches and claims that never
+reached a topic (republished with the timestamp they were earned at and a `backfill` flag),
+and each affected card's metadata:
+
+```python
+counts = await HederaLedger.reconcile(session)  # {"programs": 0, "mints": 1, "punches": 3, ...}
+```
+
+Nothing schedules it: run it from a script when you need it. A replayed message can duplicate
+one an ambiguous timeout already landed, so consumers reading a venue's topic deduplicate on
+the `event` or `redemption` uuid every message carries.
 
 See the whole lifecycle run against testnet, with HashScan links for each step:
 

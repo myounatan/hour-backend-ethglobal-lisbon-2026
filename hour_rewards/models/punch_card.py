@@ -47,6 +47,10 @@ class PunchCard(TimestampedModel, PunchCardBase, table=True):
     # verified punch, then carried across every cycle: redeeming updates the NFT's metadata
     # rather than burning and re-minting, mirroring how the card row itself survives a reset.
     hedera_nft_serial: Optional[int] = Field(default=None)
+    # The custodial account holding that serial. Written only once the transfer out of the
+    # treasury has succeeded, so a serial with no account here is a card that was minted but
+    # never handed over -- the one state :func:`hour_rewards.hedera.reconcile` can finish.
+    hedera_nft_account_id: Optional[str] = Field(default=None, max_length=64)
 
     # Relationships
     user: "User" = Relationship(back_populates="punch_cards")

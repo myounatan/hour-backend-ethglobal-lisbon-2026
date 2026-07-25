@@ -240,8 +240,13 @@ def upgrade_hedera() -> None:
             REWARD_PROGRAMS, sa.Column("hedera_topic_id", sa.String(length=64), nullable=True)
         )
 
-    if "hedera_nft_serial" not in _existing_columns(inspector, PUNCH_CARDS):
+    card_columns = _existing_columns(inspector, PUNCH_CARDS)
+    if "hedera_nft_serial" not in card_columns:
         op.add_column(PUNCH_CARDS, sa.Column("hedera_nft_serial", sa.Integer(), nullable=True))
+    if "hedera_nft_account_id" not in card_columns:
+        op.add_column(
+            PUNCH_CARDS, sa.Column("hedera_nft_account_id", sa.String(length=64), nullable=True)
+        )
 
     for table in LEDGER_PROOF_COLUMNS:
         columns = _existing_columns(inspector, table)
@@ -273,8 +278,10 @@ def downgrade_hedera() -> None:
             if column in columns:
                 op.drop_column(table, column)
 
-    if "hedera_nft_serial" in _existing_columns(inspector, PUNCH_CARDS):
-        op.drop_column(PUNCH_CARDS, "hedera_nft_serial")
+    card_columns = _existing_columns(inspector, PUNCH_CARDS)
+    for column in ("hedera_nft_serial", "hedera_nft_account_id"):
+        if column in card_columns:
+            op.drop_column(PUNCH_CARDS, column)
 
     program_columns = _existing_columns(inspector, REWARD_PROGRAMS)
     for column in ("hedera_token_id", "hedera_topic_id"):

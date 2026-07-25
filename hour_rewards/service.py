@@ -19,6 +19,7 @@ import secrets
 from typing import List, Optional
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -172,10 +173,28 @@ class RewardService:
         return events
 
     @staticmethod
+    async def _verified_punch_count(session: AsyncSession, card: PunchCard) -> int:
+        """The card's real progress: its verified punches in the cycle it's on now."""
+        result = await session.execute(
+            select(func.count())
+            .select_from(PunchEvent)
+            .where(
+                PunchEvent.punch_card_id == card.id,
+                PunchEvent.cycle_number == card.cycle_number,
+                PunchEvent.status == PunchEventStatus.VERIFIED,
+            )
+        )
+        return int(result.scalar_one())
+
+    @staticmethod
     async def record_verified_punch(
         session: AsyncSession, punch_card_id: UUID, punch_event_id: Optional[UUID] = None
     ) -> PunchCard:
-        """Bump a card's punch count. Called once a ``PunchEvent`` is marked ``VERIFIED``.
+        """Recount a card's punches. Called once a ``PunchEvent`` is marked ``VERIFIED``.
+
+        Recomputed from the ``VERIFIED`` events in the card's current cycle rather than
+        incremented, which is what ``punch_count`` is documented to be -- so calling this
+        twice for the same punch, as a retried request would, cannot inflate a card.
 
         Pass the ``PunchEvent`` this punch came from to have its identifier and receipt
         hash published alongside the punch on the venue's Hedera topic, and the resulting
@@ -184,7 +203,7 @@ class RewardService:
         card = await session.get(PunchCard, punch_card_id)
         if card is None:
             raise RewardServiceError(f"Punch card {punch_card_id} not found")
-        card.punch_count += 1
+        card.punch_count = await RewardService._verified_punch_count(session, card)
         card.updated_at = utc_now()
         await session.commit()
         await session.refresh(card)
