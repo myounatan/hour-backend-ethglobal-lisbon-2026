@@ -55,6 +55,16 @@ class RewardService:
     """Punch-card business logic shared by every host of this package."""
 
     @staticmethod
+    def is_program_active(program: Optional[RewardProgram]) -> bool:
+        """Whether a venue counts as "opted into rewards" right now.
+
+        A row's existence is the opt-in (see `RewardProgram`), but `is_enabled=False`
+        pauses it without deleting history -- so both must hold. Centralized here so
+        hosts surfacing "has rewards" (e.g. a venue list filter) don't reimplement it.
+        """
+        return program is not None and program.is_enabled
+
+    @staticmethod
     async def get_reward_program_for_venue(
         session: AsyncSession, venue_id: UUID
     ) -> Optional[RewardProgram]:
@@ -117,7 +127,7 @@ class RewardService:
     ) -> Optional[PunchCardSummaryResponse]:
         """``None`` when the venue has no enabled reward program (nothing to show)."""
         program = await RewardService.get_reward_program_for_venue(session, venue_id)
-        if program is None or not program.is_enabled:
+        if not RewardService.is_program_active(program):
             return None
         card = await RewardService.get_or_create_punch_card(session, user_id, venue_id)
         config = get_hedera_config()
