@@ -140,6 +140,14 @@ async def punch_card_nft_metadata(punch_card_id: UUID, db: DBSession) -> dict:
 `redeem_code` publishes the claim. `HederaLedger` is available directly if a host wants to
 drive it itself.
 
+See the whole lifecycle run against testnet, with HashScan links for each step:
+
+```bash
+export HEDERA_OPERATOR_ID=0.0.xxxxx HEDERA_OPERATOR_KEY=0x...   # portal.hedera.com
+python scripts/hedera_demo.py
+```
+
+
 ## Host contract
 
 The rewards tables reference tables the host application owns, and SQLAlchemy resolves
