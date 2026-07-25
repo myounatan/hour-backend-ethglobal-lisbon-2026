@@ -4,6 +4,8 @@ from hour_rewards.models.punch_event import PunchEvent, PunchEventStatus
 from hour_rewards.models.responses import (
     PunchCardSummaryResponse,
     ReceiptSubmissionResponse,
+    RedemptionScanRequest,
+    RedemptionScanResponse,
     RewardHistoryEventResponse,
     RewardHistoryEventType,
     RewardRedemptionCodeResponse,
@@ -31,6 +33,8 @@ __all__ = [
     "PunchEvent",
     "PunchEventStatus",
     "ReceiptSubmissionResponse",
+    "RedemptionScanRequest",
+    "RedemptionScanResponse",
     "RewardHistoryEventResponse",
     "RewardHistoryEventType",
     "RewardProgram",

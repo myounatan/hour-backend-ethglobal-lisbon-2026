@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hour-rewards-sdk"
-version = "0.5.0"
+version = "0.6.0"
 description = "Punch-card rewards schema for venue loyalty programs (SQLModel), with Hedera HTS/HCS punch cards and 0G Compute receipt verification"
 requires-python = ">=3.10"
 license = { text = "MIT" }

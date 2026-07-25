@@ -6,7 +6,9 @@ contract" in the README. Authentication and authorization (confirming the caller
 venue's owner, resolving the current user, etc.) are the host's job and must happen
 *before* calling these methods; the one exception is :meth:`RewardService.redeem_code`,
 which needs the code's venue resolved first so the host can run that check -- see
-:meth:`RewardService.get_redemption_code_venue_id`.
+:meth:`RewardService.get_redemption_code_venue_id`, or
+:meth:`RewardService.redeem_scanned_code` for the scan a venue's own staff make, where the
+venue is known up front and the code's claim to it is one more thing to verify.
 
 The three methods that change a card's on-chain story -- opting a venue in, banking a
 verified punch, and honouring a code -- also mirror themselves onto Hedera via
@@ -22,6 +24,7 @@ refused.
 """
 
 import secrets
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
@@ -40,6 +43,7 @@ from hour_rewards.models.punch_event import PunchEvent, PunchEventStatus
 from hour_rewards.models.responses import (
     PunchCardSummaryResponse,
     ReceiptSubmissionResponse,
+    RedemptionScanResponse,
     RewardHistoryEventResponse,
     RewardHistoryEventType,
 )
@@ -53,14 +57,48 @@ from hour_rewards.models.reward_redemption_code import (
     RewardRedemptionCode,
     RewardRedemptionCodeStatus,
 )
+from hour_rewards.redemption import (
+    ALREADY_REDEEMED,
+    CARD_MISSING,
+    CODE_EXPIRED,
+    CODE_NOT_FOUND,
+    PROGRAM_MISSING,
+    STALE_CYCLE,
+    WRONG_VENUE,
+    honoured_scan,
+    parse_redemption_payload,
+    refused_scan,
+)
 from hour_rewards.zg.receipt import DUPLICATE_RECEIPT, RETRYABLE_REJECTION_REASONS, ReceiptVerdict
 from hour_rewards.zg.verifier import verify_receipt
 
 REDEMPTION_TOKEN_BYTES = 32
 
+# How long a shown code stays good for. Short, because the customer is standing at the till
+# while it is on screen: a code that outlives the visit is one a screenshot could carry home.
+# The cycle check in `redeem_code` already stops a *reused* code; this bounds an unused one.
+DEFAULT_REDEMPTION_TTL_SECONDS = 5 * 60
+
+# A live code with less than this left is retired rather than handed back again, so reopening
+# the sheet at the wrong moment can't leave someone showing a code that dies mid-scan.
+MIN_REUSABLE_TTL_SECONDS = 30
+
 
 class RewardServiceError(ValueError):
     """A rule violation: not found, not eligible yet, or in the wrong state."""
+
+
+class RedemptionRefusedError(RewardServiceError):
+    """A code that cannot be honoured, and which of :mod:`hour_rewards.redemption`'s reasons.
+
+    A subclass so hosts that already map :class:`RewardServiceError` to a client error keep
+    working, while :meth:`RewardService.redeem_scanned_code` can turn the same refusals into a
+    verdict a scanner can phrase for staff.
+    """
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 class RewardService:
@@ -366,9 +404,20 @@ class RewardService:
 
     @staticmethod
     async def generate_redemption_code(
-        session: AsyncSession, user_id: UUID, venue_id: UUID
+        session: AsyncSession,
+        user_id: UUID,
+        venue_id: UUID,
+        *,
+        ttl_seconds: int = DEFAULT_REDEMPTION_TTL_SECONDS,
     ) -> RewardRedemptionCode:
-        """Issue a QR token once a card has reached its program's threshold."""
+        """Issue (or hand back) a QR token once a card has reached its program's threshold.
+
+        Showing a code is idempotent for as long as one is alive: closing and reopening the
+        sheet returns the same token with the same deadline, rather than minting a code per tap
+        and leaving a trail of pending ones that all still work. Anything a customer can no
+        longer be shown -- run out of time, or left over from a cycle that has since been
+        redeemed -- is closed out here, so ``pending`` means what it says.
+        """
         program = await RewardService.get_reward_program_for_venue(session, venue_id)
         if program is None:
             raise RewardServiceError(f"Venue {venue_id} has no reward program")
@@ -376,15 +425,59 @@ class RewardService:
         if card.punch_count < program.punches_required:
             raise RewardServiceError("Punch card has not reached the required threshold")
 
+        now = utc_now()
+        live = await RewardService._retire_spent_codes(session, card, now=now)
+        if live is not None:
+            return live
+
         code = RewardRedemptionCode(
             punch_card_id=card.id,
             cycle_number=card.cycle_number,
             token=secrets.token_urlsafe(REDEMPTION_TOKEN_BYTES),
+            expires_at=now + timedelta(seconds=ttl_seconds),
         )
         session.add(code)
         await session.commit()
         await session.refresh(code)
         return code
+
+    @staticmethod
+    async def _retire_spent_codes(
+        session: AsyncSession, card: PunchCard, *, now: datetime
+    ) -> Optional[RewardRedemptionCode]:
+        """Close out this card's unusable pending codes; return the one still worth showing.
+
+        Codes from an earlier cycle are invalidated rather than expired: they were made
+        unusable by a redemption, not by the clock.
+        """
+        result = await session.execute(
+            select(RewardRedemptionCode)
+            .where(
+                RewardRedemptionCode.punch_card_id == card.id,
+                RewardRedemptionCode.status == RewardRedemptionCodeStatus.PENDING,
+            )
+            .order_by(RewardRedemptionCode.created_at.desc())
+        )
+
+        live: Optional[RewardRedemptionCode] = None
+        for code in result.scalars().all():
+            if code.cycle_number != card.cycle_number:
+                code.status = RewardRedemptionCodeStatus.INVALIDATED
+            elif (
+                code.expires_at is not None
+                and (code.expires_at - now).total_seconds() < MIN_REUSABLE_TTL_SECONDS
+            ):
+                code.status = RewardRedemptionCodeStatus.EXPIRED
+            elif live is None:
+                live = code
+            else:
+                # Two live codes for one card is one too many to keep track of.
+                code.status = RewardRedemptionCodeStatus.INVALIDATED
+
+        await session.commit()
+        if live is not None:
+            await session.refresh(live)
+        return live
 
     @staticmethod
     async def get_redemption_code_venue_id(session: AsyncSession, token: str) -> Optional[UUID]:
@@ -401,39 +494,61 @@ class RewardService:
 
     @staticmethod
     async def redeem_code(
-        session: AsyncSession, token: str, redeemed_by_owner_id: Optional[UUID]
+        session: AsyncSession,
+        token: str,
+        redeemed_by_owner_id: Optional[UUID],
+        *,
+        expected_venue_id: Optional[UUID] = None,
     ) -> RewardRedemption:
         """Validate and honour a code: writes the history row and resets the card's cycle.
 
         Assumes the caller has already been authorized against the venue resolved by
-        :meth:`get_redemption_code_venue_id`.
+        :meth:`get_redemption_code_venue_id`. Pass ``expected_venue_id`` -- the venue that did
+        the scanning -- to also refuse a code belonging to a different one; a host that
+        authorizes per venue has effectively checked this already, and a host that doesn't
+        should not be able to cross-redeem by omission.
+
+        Every refusal is a :class:`RedemptionRefusedError` carrying one of
+        :mod:`hour_rewards.redemption`'s reasons.
         """
         result = await session.execute(
             select(RewardRedemptionCode).where(RewardRedemptionCode.token == token)
         )
         code = result.scalar_one_or_none()
         if code is None:
-            raise RewardServiceError("Redemption code not found")
+            raise RedemptionRefusedError(CODE_NOT_FOUND, "Redemption code not found")
+        if code.status == RewardRedemptionCodeStatus.REDEEMED:
+            raise RedemptionRefusedError(ALREADY_REDEEMED, "Redemption code has been used")
+        if code.status == RewardRedemptionCodeStatus.EXPIRED:
+            raise RedemptionRefusedError(CODE_EXPIRED, "Redemption code has expired")
         if code.status != RewardRedemptionCodeStatus.PENDING:
-            raise RewardServiceError(f"Redemption code is {code.status.value}, not pending")
+            raise RedemptionRefusedError(
+                STALE_CYCLE, f"Redemption code is {code.status.value}, not pending"
+            )
 
         now = utc_now()
         if code.expires_at is not None and code.expires_at <= now:
             code.status = RewardRedemptionCodeStatus.EXPIRED
             await session.commit()
-            raise RewardServiceError("Redemption code has expired")
+            raise RedemptionRefusedError(CODE_EXPIRED, "Redemption code has expired")
 
         card = await session.get(PunchCard, code.punch_card_id)
         if card is None:
-            raise RewardServiceError("Punch card not found for this code")
+            raise RedemptionRefusedError(CARD_MISSING, "Punch card not found for this code")
+        if expected_venue_id is not None and card.venue_id != expected_venue_id:
+            raise RedemptionRefusedError(
+                WRONG_VENUE, "Redemption code belongs to a different venue"
+            )
         if code.cycle_number != card.cycle_number:
             code.status = RewardRedemptionCodeStatus.INVALIDATED
             await session.commit()
-            raise RewardServiceError("Redemption code is from a previous cycle")
+            raise RedemptionRefusedError(STALE_CYCLE, "Redemption code is from a previous cycle")
 
         program = await RewardService.get_reward_program_for_venue(session, card.venue_id)
         if program is None:
-            raise RewardServiceError(f"Venue {card.venue_id} has no reward program")
+            raise RedemptionRefusedError(
+                PROGRAM_MISSING, f"Venue {card.venue_id} has no reward program"
+            )
 
         redemption = RewardRedemption(
             venue_id=card.venue_id,
@@ -461,3 +576,37 @@ class RewardService:
         # Publishes the claim and repoints the card's NFT at its now-empty next cycle.
         await HederaLedger.record_redemption(session, card, redemption)
         return redemption
+
+    @staticmethod
+    async def redeem_scanned_code(
+        session: AsyncSession,
+        *,
+        qr_payload: str,
+        venue_id: UUID,
+        redeemed_by_owner_id: Optional[UUID],
+    ) -> RedemptionScanResponse:
+        """Honour whatever a venue's scanner just read, or say why it couldn't be.
+
+        Everything a host's scan endpoint does after authorizing the caller against
+        ``venue_id`` -- the venue doing the scanning, not the one the code claims. Both are
+        compared: the payload's own venue first (so a code from elsewhere is turned away before
+        a token is looked up at all) and then the card's, inside :meth:`redeem_code`.
+
+        Refusals come back as a verdict; only an unreadable payload raises
+        (:class:`hour_rewards.redemption.RedemptionPayloadError`), since that is a scan of
+        something that was never one of our codes.
+        """
+        payload = parse_redemption_payload(qr_payload)
+        if payload.venue_id is not None and payload.venue_id != venue_id:
+            return refused_scan(WRONG_VENUE)
+
+        try:
+            redemption = await RewardService.redeem_code(
+                session,
+                payload.token,
+                redeemed_by_owner_id=redeemed_by_owner_id,
+                expected_venue_id=venue_id,
+            )
+        except RedemptionRefusedError as refusal:
+            return refused_scan(refusal.reason)
+        return honoured_scan(redemption)

@@ -80,17 +80,38 @@ class ReceiptSubmissionResponse(BaseModel):
 
 
 class RewardRedemptionCodeResponse(BaseModel):
-    """The QR token issued for a completed card, once it is eligible to redeem."""
+    """The QR token issued for a completed card, once it is eligible to redeem.
+
+    ``qr_payload`` is the string to put in the QR image -- built by
+    :func:`hour_rewards.redemption.build_redemption_payload`, and the only field a client
+    needs to display a code. ``expires_in_seconds`` is what to count down (``-1`` for a code
+    with no expiry); see :func:`hour_rewards.redemption.seconds_until` for why a duration is
+    sent rather than left to a client to work out from ``expires_at``.
+    """
 
     id: UUID
+    venue_id: UUID
     punch_card_id: UUID
     cycle_number: int
     token: str
+    qr_payload: str
     status: RewardRedemptionCodeStatus
     expires_at: Optional[datetime] = None
+    expires_in_seconds: int = -1
 
     class Config:
         json_encoders = {UUID: str}
+
+
+class RedemptionScanRequest(BaseModel):
+    """What a venue's scanner sends: the scanned string, exactly as the camera read it.
+
+    Parsing it is :func:`hour_rewards.redemption.parse_redemption_payload`'s job, not the
+    client's -- a scanner that pulled the token out itself would be a second implementation of
+    the format to keep in step.
+    """
+
+    qr_payload: str
 
 
 class RewardRedemptionResponse(BaseModel):
@@ -105,6 +126,23 @@ class RewardRedemptionResponse(BaseModel):
     reward_description: str
     redeemed_by_owner_id: Optional[UUID] = None
     created_at: datetime
+
+    class Config:
+        json_encoders = {UUID: str}
+
+
+class RedemptionScanResponse(BaseModel):
+    """What came of scanning a code: a reward handed over, or a refusal with a reason.
+
+    Shaped like :class:`ReceiptSubmissionResponse` on purpose. ``approved`` is the one field a
+    scanner needs; ``reason`` is from the vocabulary in :mod:`hour_rewards.redemption`, so a
+    host can phrase refusals for staff; ``reward_description`` says what to actually give out.
+    """
+
+    approved: bool
+    reason: Optional[str] = None
+    reward_description: Optional[str] = None
+    redemption: Optional[RewardRedemptionResponse] = None
 
     class Config:
         json_encoders = {UUID: str}

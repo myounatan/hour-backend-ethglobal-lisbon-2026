@@ -14,7 +14,9 @@ logs every punch -- with that attestation attached -- to an HCS topic.
 
 A punch therefore starts from an uploaded photo, and :mod:`hour_rewards.receipt_photo` takes it
 from there: a host's upload endpoint hands over the bytes and this package validates, reads
-(through the host's own OCR) and judges them.
+(through the host's own OCR) and judges them. A full card ends at a QR code scanned across the
+counter, and :mod:`hour_rewards.redemption` takes that: what the code carries, and whether the
+venue holding the scanner is the one entitled to honour it.
 """
 
 from hour_rewards.base import LedgerProofModel, TimestampedModel, utc_now, value_enum
@@ -35,6 +37,8 @@ from hour_rewards.models import (
     PunchEvent,
     PunchEventStatus,
     ReceiptSubmissionResponse,
+    RedemptionScanRequest,
+    RedemptionScanResponse,
     RewardHistoryEventResponse,
     RewardHistoryEventType,
     RewardProgram,
@@ -60,12 +64,28 @@ from hour_rewards.receipt_photo import (
     submit_receipt_photo,
     validate_receipt_image,
 )
-from hour_rewards.service import RewardService, RewardServiceError
+from hour_rewards.redemption import (
+    REDEMPTION_PAYLOAD_VERSION,
+    REDEMPTION_REFUSAL_REASONS,
+    RedemptionPayload,
+    RedemptionPayloadError,
+    build_redemption_payload,
+    parse_redemption_payload,
+    redemption_code_response,
+    redemption_response,
+)
+from hour_rewards.service import (
+    DEFAULT_REDEMPTION_TTL_SECONDS,
+    RedemptionRefusedError,
+    RewardService,
+    RewardServiceError,
+)
 from hour_rewards.zg import ReceiptVerdict, ZGConfig, configure_zg, get_zg_config, verify_receipt
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 __all__ = [
+    "DEFAULT_REDEMPTION_TTL_SECONDS",
     "HederaAccount",
     "HederaAccountResponse",
     "HederaConfig",
@@ -77,12 +97,19 @@ __all__ = [
     "PunchCardSummaryResponse",
     "PunchEvent",
     "PunchEventStatus",
+    "REDEMPTION_PAYLOAD_VERSION",
+    "REDEMPTION_REFUSAL_REASONS",
     "ReceiptImageError",
     "ReceiptImageTooLargeError",
     "ReceiptReader",
     "ReceiptScanError",
     "ReceiptSubmissionResponse",
     "ReceiptVerdict",
+    "RedemptionPayload",
+    "RedemptionPayloadError",
+    "RedemptionRefusedError",
+    "RedemptionScanRequest",
+    "RedemptionScanResponse",
     "RewardHistoryEventResponse",
     "RewardHistoryEventType",
     "RewardProgram",
@@ -102,6 +129,7 @@ __all__ = [
     "ZGConfig",
     "__version__",
     "build_card_metadata",
+    "build_redemption_payload",
     "close_hedera_clients",
     "configure_hedera",
     "configure_receipt_reader",
@@ -109,6 +137,9 @@ __all__ = [
     "get_hedera_config",
     "get_receipt_reader",
     "get_zg_config",
+    "parse_redemption_payload",
+    "redemption_code_response",
+    "redemption_response",
     "submit_receipt_photo",
     "utc_now",
     "validate_receipt_image",

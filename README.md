@@ -36,7 +36,7 @@ from hour_rewards.models import PunchCard, PunchEvent, PunchEventStatus, RewardP
 | `reward_programs` | One row per opted-in venue: `punches_required`, `reward_description`, `is_enabled` |
 | `punch_cards` | One row per user per venue, with a `cycle_number` and denormalized `punch_count` |
 | `punch_events` | One receipt submission, plus the 0G verification that judged it |
-| `reward_redemption_codes` | QR tokens issued for a full card, valid while `PENDING` and in-cycle |
+| `reward_redemption_codes` | QR tokens issued for a full card, valid while `PENDING`, unexpired and in-cycle |
 | `reward_redemptions` | Completed claims, snapshotting the program's terms at redemption time |
 | `hedera_accounts` | The custodial Hedera account holding one user's card NFTs (Hedera layer only) |
 
@@ -65,18 +65,73 @@ summary = await RewardService.get_punch_card_summary(session, user_id, venue_id)
 history = await RewardService.get_punch_history(session, user_id, venue_id)
 result = await RewardService.submit_receipt(session, user_id, venue_id, receipt_text)  # see "0G"
 code = await RewardService.generate_redemption_code(session, user_id, venue_id)  # raises RewardServiceError if under threshold
-redemption = await RewardService.redeem_code(session, token, redeemed_by_owner_id)
+scan = await RewardService.redeem_scanned_code(session, qr_payload=..., venue_id=..., redeemed_by_owner_id=...)  # see "Redemption"
 ```
 
 Authentication and authorization -- who the current user is, whether they own the venue
 scanning a code -- are the host's job, done before calling in. The one exception is
 `redeem_code`: a token alone doesn't carry its venue, so call
 `RewardService.get_redemption_code_venue_id(session, token)` first to resolve it and run
-your own authorization check, then call `redeem_code`.
+your own authorization check, then call `redeem_code`. `redeem_scanned_code` is the way
+round that for a venue's own scanner, where the venue is known before the code is.
 
 `RewardServiceError` (a `ValueError`) is raised for rule violations: an under-threshold
 card, an already-redeemed or wrong-cycle code, a missing program. Hosts typically map it
 to a 409 Conflict.
+
+## Redemption — what a scan endpoint does
+
+A full card is claimed in person, so `hour_rewards.redemption` covers that whole step: what the
+QR code says, whether this venue may honour it, and what to tell the person holding the phone.
+
+The customer's app asks for a code and shows `qr_payload` as a QR image. Nothing else about the
+response needs rendering:
+
+```python
+from hour_rewards import redemption_code_response
+
+code = await RewardService.generate_redemption_code(session, user.id, venue_id)
+return redemption_code_response(code, venue_id=venue_id)
+# {"qr_payload": "hour://redeem/v1?venue=…&card=…&cycle=3&token=…",
+#  "expires_in_seconds": 300, "status": "pending", …}
+```
+
+Codes live `DEFAULT_REDEMPTION_TTL_SECONDS` (5 minutes) by default -- pass `ttl_seconds` to
+change it. Asking again while one is alive returns the *same* code rather than minting another,
+so a customer reopening the sheet doesn't leave a trail of working tokens behind. Count down
+`expires_in_seconds`, not `expires_at`: the timestamp columns here are naive UTC, so a duration
+is the only unambiguous, clock-skew-proof form.
+
+The venue's app sends back whatever its camera read, exactly as read:
+
+```python
+from hour_rewards import RedemptionScanRequest, RewardService
+
+# after authorizing the caller as an owner of `venue_id`
+scan = await RewardService.redeem_scanned_code(
+    session, qr_payload=body.qr_payload, venue_id=venue_id, redeemed_by_owner_id=owner_id
+)
+# {"approved": true, "reward_description": "Free drink", "redemption": {…}}
+# {"approved": false, "reason": "wrong_venue"}
+```
+
+`venue_id` is the venue doing the scanning, and the code's claim to it is checked twice: the
+payload's own `venue` first, so a code from elsewhere is refused before a token is looked up,
+then the card's, inside `redeem_code`. A host that authorizes per venue has effectively checked
+this already; a host that doesn't shouldn't be able to cross-redeem by omission.
+
+A refusal is a verdict, not an exception -- `reason` is one of `REDEMPTION_REFUSAL_REASONS`
+(`wrong_venue`, `code_not_found`, `code_expired`, `already_redeemed`, `stale_cycle`,
+`card_missing`, `program_missing`), for a host to phrase for staff. The one exception is
+`RedemptionPayloadError`: a scan of something that was never one of our codes, which a host
+maps to a 400. `RewardService.redeem_code` raises the same refusals as
+`RedemptionRefusedError` (a `RewardServiceError` carrying `.reason`) for hosts that redeem by
+token directly.
+
+`parse_redemption_payload` / `build_redemption_payload` are exported so a client library can
+read and write the same format -- the companion `hour-rewards-ui` package mirrors them, which
+is what lets a scanner reject a wrong-venue code without a round trip. A bare token parses too,
+so codes issued before this format still redeem.
 
 ## Receipt photos — what an upload endpoint does
 
