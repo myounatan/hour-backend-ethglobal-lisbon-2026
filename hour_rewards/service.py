@@ -34,7 +34,7 @@ from sqlmodel import select
 from hour_rewards.base import utc_now
 from hour_rewards.hedera.config import get_hedera_config
 from hour_rewards.hedera.ledger import HederaLedger
-from hour_rewards.host_queries import venue_name
+from hour_rewards.host_queries import venue_address, venue_name
 from hour_rewards.models.punch_card import PunchCard
 from hour_rewards.models.punch_event import PunchEvent, PunchEventStatus
 from hour_rewards.models.responses import (
@@ -243,7 +243,6 @@ class RewardService:
         receipt_text: str,
         *,
         receipt_image_id: Optional[UUID] = None,
-        venue_address: Optional[str] = None,
     ) -> ReceiptSubmissionResponse:
         """Claim a punch with a photographed receipt, already read into text by the host.
 
@@ -253,8 +252,10 @@ class RewardService:
         topic with the verification's own trace attached.
 
         OCR is the host's job, since it already has a document pipeline and this package has
-        no business holding a second set of credentials; pass ``venue_address`` when the host
-        has one, and the model gets to match an address line too.
+        no business holding a second set of credentials -- the words are all that is wanted
+        here. What the receipt is checked against, the venue's name and its address, is read
+        from the venue's own row (:mod:`hour_rewards.host_queries`) rather than taken from the
+        caller, so a submission cannot describe the venue it claims to be from.
 
         A receipt this venue has already seen is refused rather than filed a second time: its
         ``dedupe_hash`` is taken, which is what makes a receipt single-use -- and also means
@@ -269,7 +270,8 @@ class RewardService:
 
         card = await RewardService.get_or_create_punch_card(session, user_id, venue_id)
         name = await venue_name(session, venue_id)
-        verdict = await verify_receipt(venue_id, name, receipt_text, venue_address=venue_address)
+        address = await venue_address(session, venue_id)
+        verdict = await verify_receipt(venue_id, name, receipt_text, venue_address=address)
 
         if verdict.rejection_reason in RETRYABLE_REJECTION_REASONS:
             return await RewardService._submission_response(

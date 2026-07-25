@@ -88,7 +88,9 @@ what makes it checkable is kept on the punch.
 
 OCR is the host's job. This package takes the text, because a host running receipt photos
 already has a document pipeline and shouldn't hand a second set of credentials to a package
-that only needs the words:
+that only needs the words. What the text is checked against — the venue's name and address —
+is read from its `venues` row rather than passed in, so a submission can't describe the venue
+it claims to come from:
 
 ```python
 from hour_rewards.service import RewardService
@@ -282,7 +284,10 @@ The rewards tables reference tables the host application owns, and SQLAlchemy re
 those links by class name once both sets of models share one SQLModel registry. A host
 must therefore provide:
 
-**Tables:** `users`, `venues`, `owners`, `user_images`.
+**Tables:** `users`, `venues`, `owners`, `user_images`. Two of their columns are read by name
+rather than through a model — `venues.name` and `venues.address`, both in
+`hour_rewards.host_queries` — for naming a venue's NFT collection and for checking its
+receipts.
 
 **Models** registered with SQLModel's metadata before the first query — `User`, `Venue`,
 `Owner` and `UserImage` — with these back-references:
