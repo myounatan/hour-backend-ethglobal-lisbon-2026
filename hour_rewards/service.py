@@ -13,23 +13,33 @@ verified punch, and honouring a code -- also mirror themselves onto Hedera via
 :class:`hour_rewards.hedera.HederaLedger`. Those calls are no-ops until a host configures
 the ledger, and they never raise: the database result is returned whether or not the
 network agreed. See :mod:`hour_rewards.hedera`.
+
+:meth:`RewardService.submit_receipt` is the one method that depends on an outside answer
+rather than mirroring one: a receipt only becomes a punch if 0G Compute says it is a receipt
+from that venue (:mod:`hour_rewards.zg`). A submission either earns its punch or is refused
+with a reason -- nothing waits on a human -- and unconfigured or unreachable, every receipt is
+refused.
 """
 
 import secrets
+from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from hour_rewards.base import utc_now
 from hour_rewards.hedera.config import get_hedera_config
 from hour_rewards.hedera.ledger import HederaLedger
+from hour_rewards.host_queries import venue_name
 from hour_rewards.models.punch_card import PunchCard
 from hour_rewards.models.punch_event import PunchEvent, PunchEventStatus
 from hour_rewards.models.responses import (
     PunchCardSummaryResponse,
+    ReceiptSubmissionResponse,
     RewardHistoryEventResponse,
     RewardHistoryEventType,
 )
@@ -43,6 +53,8 @@ from hour_rewards.models.reward_redemption_code import (
     RewardRedemptionCode,
     RewardRedemptionCodeStatus,
 )
+from hour_rewards.zg.receipt import DUPLICATE_RECEIPT, RETRYABLE_REJECTION_REASONS, ReceiptVerdict
+from hour_rewards.zg.verifier import verify_receipt
 
 REDEMPTION_TOKEN_BYTES = 32
 
@@ -222,6 +234,133 @@ class RewardService:
             await session.get(PunchEvent, punch_event_id) if punch_event_id is not None else None
         )
         return await HederaLedger.record_punch(session, card, punch_event)
+
+    @staticmethod
+    async def submit_receipt(
+        session: AsyncSession,
+        user_id: UUID,
+        venue_id: UUID,
+        receipt_text: str,
+        *,
+        receipt_image_id: Optional[UUID] = None,
+        venue_address: Optional[str] = None,
+    ) -> ReceiptSubmissionResponse:
+        """Claim a punch with a photographed receipt, already read into text by the host.
+
+        The whole path a punch takes: the receipt's text is judged on 0G Compute (see
+        :mod:`hour_rewards.zg`), filed as a ``PunchEvent`` under whatever that decided, and --
+        only if it was ``VERIFIED`` -- banked on the card and published to the venue's Hedera
+        topic with the verification's own trace attached.
+
+        OCR is the host's job, since it already has a document pipeline and this package has
+        no business holding a second set of credentials; pass ``venue_address`` when the host
+        has one, and the model gets to match an address line too.
+
+        A receipt this venue has already seen is refused rather than filed a second time: its
+        ``dedupe_hash`` is taken, which is what makes a receipt single-use -- and also means
+        resubmitting one that was already judged can't shop for a better verdict. The one
+        refusal that isn't filed is a verifier that couldn't answer at all, since an outage
+        should cost a retry and not the receipt. Nothing here raises for a refusal; read
+        ``approved`` and ``reason``.
+        """
+        program = await RewardService.get_reward_program_for_venue(session, venue_id)
+        if not RewardService.is_program_active(program):
+            raise RewardServiceError(f"Venue {venue_id} has no active reward program")
+
+        card = await RewardService.get_or_create_punch_card(session, user_id, venue_id)
+        name = await venue_name(session, venue_id)
+        verdict = await verify_receipt(venue_id, name, receipt_text, venue_address=venue_address)
+
+        if verdict.rejection_reason in RETRYABLE_REJECTION_REASONS:
+            return await RewardService._submission_response(
+                session, user_id, venue_id, verdict, punch_event=None
+            )
+
+        if await RewardService._receipt_already_claimed(session, venue_id, verdict.dedupe_hash):
+            return await RewardService._submission_response(
+                session, user_id, venue_id, verdict, punch_event=None, reason=DUPLICATE_RECEIPT
+            )
+
+        punch_event = PunchEvent(
+            punch_card_id=card.id,
+            venue_id=venue_id,
+            cycle_number=card.cycle_number,
+            receipt_image_id=receipt_image_id,
+            receipt_date=verdict.receipt_date,
+            receipt_total_amount=verdict.receipt_total,
+            receipt_identifier=verdict.receipt_identifier,
+            dedupe_hash=verdict.dedupe_hash,
+            status=verdict.status,
+            rejection_reason=verdict.rejection_reason,
+            ai_notes=verdict.notes,
+            ai_confidence_score=Decimal(str(verdict.confidence)),
+            zg_request_id=verdict.zg_request_id,
+            zg_provider_address=verdict.zg_provider_address,
+            zg_tee_verified=verdict.zg_tee_verified,
+        )
+        session.add(punch_event)
+        try:
+            await session.commit()
+        except IntegrityError:
+            # Two submissions of the same receipt racing each other: the unique constraint
+            # decides which one is the punch, and this is the other one.
+            await session.rollback()
+            return await RewardService._submission_response(
+                session, user_id, venue_id, verdict, punch_event=None, reason=DUPLICATE_RECEIPT
+            )
+        await session.refresh(punch_event)
+
+        if verdict.status == PunchEventStatus.VERIFIED:
+            await RewardService.record_verified_punch(session, card.id, punch_event.id)
+            # Banking the punch commits (as does mirroring it), which expires this row --
+            # reloaded here so the response can read what the ledger wrote back onto it.
+            await session.refresh(punch_event)
+
+        return await RewardService._submission_response(
+            session, user_id, venue_id, verdict, punch_event=punch_event
+        )
+
+    @staticmethod
+    async def _receipt_already_claimed(
+        session: AsyncSession, venue_id: UUID, dedupe_hash: str
+    ) -> bool:
+        """Whether this venue has seen this receipt before, under any user's card."""
+        result = await session.execute(
+            select(PunchEvent.id).where(
+                PunchEvent.venue_id == venue_id, PunchEvent.dedupe_hash == dedupe_hash
+            )
+        )
+        return result.first() is not None
+
+    @staticmethod
+    async def _submission_response(
+        session: AsyncSession,
+        user_id: UUID,
+        venue_id: UUID,
+        verdict: ReceiptVerdict,
+        *,
+        punch_event: Optional[PunchEvent],
+        reason: Optional[str] = None,
+    ) -> ReceiptSubmissionResponse:
+        """One verdict, told as an outcome: a refusal overrides whatever the model thought."""
+        approved = punch_event is not None and verdict.approved and reason is None
+        return ReceiptSubmissionResponse(
+            punch_event_id=punch_event.id if punch_event else None,
+            status=PunchEventStatus.VERIFIED if approved else PunchEventStatus.REJECTED,
+            approved=approved,
+            reason=reason or (None if approved else verdict.rejection_reason),
+            notes=verdict.notes,
+            confidence=verdict.confidence,
+            summary=await RewardService.get_punch_card_summary(session, user_id, venue_id),
+            zg_request_id=verdict.zg_request_id,
+            zg_tee_verified=verdict.zg_tee_verified,
+            hedera_topic_sequence_number=(
+                punch_event.hedera_topic_sequence_number if punch_event else None
+            ),
+            hedera_consensus_timestamp=(
+                punch_event.hedera_consensus_timestamp if punch_event else None
+            ),
+        )
 
     @staticmethod
     async def generate_redemption_code(

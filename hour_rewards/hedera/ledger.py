@@ -33,7 +33,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, TypeVar
 from uuid import UUID
 
-from sqlalchemy import and_, or_, text
+from sqlalchemy import and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col, select
 
@@ -43,6 +43,7 @@ from hour_rewards.hedera.config import HederaConfig, get_hedera_config
 from hour_rewards.hedera.keys import encrypt_private_key, ledger_user_ref
 from hour_rewards.hedera.metadata import card_metadata_uri
 from hour_rewards.hedera.transactions import MAX_TOKEN_NAME_LENGTH
+from hour_rewards.host_queries import venue_name
 from hour_rewards.models.hedera_account import HederaAccount
 from hour_rewards.models.punch_card import PunchCard
 from hour_rewards.models.punch_event import PunchEvent, PunchEventStatus
@@ -52,8 +53,9 @@ from hour_rewards.models.reward_redemption import RewardRedemption
 logger = logging.getLogger("hour_rewards.hedera")
 
 # Bumped if the shape of the JSON published to a topic changes, so a consumer reading a
-# venue's whole history can tell which schema each message was written under.
-MESSAGE_VERSION = 1
+# venue's whole history can tell which schema each message was written under. v2 added the
+# `zg` verification block to punch messages (see `_punch_proof`).
+MESSAGE_VERSION = 2
 
 # How many rows of each kind one reconcile pass works through.
 DEFAULT_RECONCILE_LIMIT = 50
@@ -283,11 +285,9 @@ class HederaLedger:
             return program
 
         if not program.hedera_token_id:
-            venue_name = await _venue_name(session, program.venue_id)
+            name = await venue_name(session, program.venue_id, max_length=MAX_TOKEN_NAME_LENGTH)
             try:
-                token_id = await transactions.create_collection(
-                    config, venue_name, program.venue_id
-                )
+                token_id = await transactions.create_collection(config, name, program.venue_id)
             except Exception as error:
                 logger.warning(
                     "Hedera collection creation failed for venue %s: %s", program.venue_id, error
@@ -389,8 +389,21 @@ def _card_message(
 
 
 def _punch_proof(punch_event: PunchEvent) -> Dict[str, Any]:
-    """Which submission earned a punch: its receipt hash, never anything off the receipt."""
-    return {"event": str(punch_event.id), "receipt": punch_event.dedupe_hash}
+    """Which submission earned a punch, and which attested inference approved it.
+
+    The receipt itself never leaves the database -- only its hash, which is what proves two
+    punches came from different receipts without publishing what anyone bought. The ``zg``
+    block is the 0G Router's trace for the verification (see :mod:`hour_rewards.zg`), carried
+    here so the ledger records *why* a punch was granted and not merely that it was.
+    """
+    proof: Dict[str, Any] = {"event": str(punch_event.id), "receipt": punch_event.dedupe_hash}
+    if punch_event.zg_request_id:
+        proof["zg"] = {
+            "request": punch_event.zg_request_id,
+            "provider": punch_event.zg_provider_address,
+            "tee": punch_event.zg_tee_verified,
+        }
+    return proof
 
 
 def _redemption_message(
@@ -599,12 +612,3 @@ async def _punch_ordinal(session: AsyncSession, punch_event: PunchEvent) -> int:
 async def _program_for_venue(session: AsyncSession, venue_id: UUID) -> Optional[RewardProgram]:
     result = await session.execute(select(RewardProgram).where(RewardProgram.venue_id == venue_id))
     return result.scalar_one_or_none()
-
-
-async def _venue_name(session: AsyncSession, venue_id: UUID) -> str:
-    """Read off the host's ``venues`` table, so a collection carries the venue's own name."""
-    result = await session.execute(
-        text("SELECT name FROM venues WHERE id = :venue_id"), {"venue_id": venue_id}
-    )
-    row = result.first()
-    return (row[0] if row and row[0] else "Venue")[:MAX_TOKEN_NAME_LENGTH]

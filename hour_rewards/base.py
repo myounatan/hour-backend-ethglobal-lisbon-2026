@@ -36,7 +36,7 @@ class LedgerProofModel(SQLModel):
 def value_enum(enum_class: Type[PyEnum]) -> SAEnum:
     """A VARCHAR column storing an enum's *values* rather than its member names.
 
-    ``values_callable`` is what keeps ``"pending_review"`` (not ``"PENDING_REVIEW"``) in
+    ``values_callable`` is what keeps ``"verified"`` (not ``"VERIFIED"``) in
     the database, so these columns match what :mod:`hour_rewards.migrations` creates
     regardless of how the host app configures SQLModel.
     """

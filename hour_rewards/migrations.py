@@ -19,7 +19,8 @@ Tables are created parent-first (reward_programs -> punch_cards -> punch_events 
 reward_redemption_codes -> reward_redemptions) since each references the previous one.
 The Hedera columns and the custodial ``hedera_accounts`` table are a separate pair of
 operations (:func:`upgrade_hedera` / :func:`downgrade_hedera`), so a host can adopt the
-punch cards without the ledger.
+punch cards without the ledger; the 0G verification columns are a third pair
+(:func:`upgrade_zg` / :func:`downgrade_zg`), for the same reason.
 Requires the ``migrations`` extra: ``pip install hour-rewards-sdk[migrations]``.
 """
 
@@ -42,7 +43,6 @@ LEDGER_PROOF_COLUMNS = (PUNCH_EVENTS, REDEMPTIONS)
 # Stored as VARCHAR sized to the longest value (native_enum=False), matching the
 # `value_enum(...)` columns on the SQLModel side.
 PUNCH_EVENT_STATUS = sa.Enum(
-    "pending_review",
     "verified",
     "rejected",
     name="puncheventstatus",
@@ -108,12 +108,8 @@ def upgrade() -> None:
             sa.Column("receipt_total_amount", sa.Numeric(), nullable=True),
             sa.Column("receipt_identifier", sa.String(length=128), nullable=True),
             sa.Column("dedupe_hash", sa.String(length=128), nullable=False),
-            sa.Column(
-                "status",
-                PUNCH_EVENT_STATUS,
-                nullable=False,
-                server_default="pending_review",
-            ),
+            # No server default: every row is written with the verdict that created it.
+            sa.Column("status", PUNCH_EVENT_STATUS, nullable=False),
             sa.Column("rejection_reason", sa.String(length=256), nullable=True),
             sa.Column("ai_notes", sa.String(), nullable=True),
             sa.Column("ai_confidence_score", sa.Numeric(), nullable=True),
@@ -262,6 +258,39 @@ def upgrade_hedera() -> None:
             op.add_column(
                 table, sa.Column("hedera_metadata_tx_id", sa.String(length=128), nullable=True)
             )
+
+
+def upgrade_zg() -> None:
+    """Add the 0G verification columns to ``punch_events``.
+
+    Nullable like the Hedera ones and for the same reason: a punch that predates the
+    verifier, or one the Router answered without a trace, is still a valid punch. See
+    :mod:`hour_rewards.zg`.
+    """
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+
+    columns = _existing_columns(inspector, PUNCH_EVENTS)
+    if "zg_request_id" not in columns:
+        op.add_column(
+            PUNCH_EVENTS, sa.Column("zg_request_id", sa.String(length=128), nullable=True)
+        )
+    if "zg_provider_address" not in columns:
+        op.add_column(
+            PUNCH_EVENTS, sa.Column("zg_provider_address", sa.String(length=128), nullable=True)
+        )
+    if "zg_tee_verified" not in columns:
+        op.add_column(PUNCH_EVENTS, sa.Column("zg_tee_verified", sa.Boolean(), nullable=True))
+
+
+def downgrade_zg() -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+
+    columns = _existing_columns(inspector, PUNCH_EVENTS)
+    for column in ("zg_request_id", "zg_provider_address", "zg_tee_verified"):
+        if column in columns:
+            op.drop_column(PUNCH_EVENTS, column)
 
 
 def downgrade_hedera() -> None:

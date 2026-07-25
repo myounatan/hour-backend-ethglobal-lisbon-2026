@@ -3,6 +3,7 @@ from hour_rewards.models.punch_card import PunchCard, PunchCardBase
 from hour_rewards.models.punch_event import PunchEvent, PunchEventStatus
 from hour_rewards.models.responses import (
     PunchCardSummaryResponse,
+    ReceiptSubmissionResponse,
     RewardHistoryEventResponse,
     RewardHistoryEventType,
     RewardRedemptionCodeResponse,
@@ -29,6 +30,7 @@ __all__ = [
     "PunchCardSummaryResponse",
     "PunchEvent",
     "PunchEventStatus",
+    "ReceiptSubmissionResponse",
     "RewardHistoryEventResponse",
     "RewardHistoryEventType",
     "RewardProgram",

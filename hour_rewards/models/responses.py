@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from hour_rewards.models.punch_event import PunchEventStatus
 from hour_rewards.models.reward_redemption_code import RewardRedemptionCodeStatus
 
 
@@ -43,6 +44,36 @@ class RewardHistoryEventResponse(BaseModel):
     id: UUID
     type: RewardHistoryEventType
     occurred_at: datetime
+
+    class Config:
+        json_encoders = {UUID: str}
+
+
+class ReceiptSubmissionResponse(BaseModel):
+    """What came of photographing a receipt: whether it earned a punch, and who says so.
+
+    ``approved`` is the one field a client needs (it maps onto ``PunchVerificationResult`` in
+    ``hour-rewards-ui``); ``reason`` explains a refusal in the vocabulary of
+    :mod:`hour_rewards.zg.receipt`, and ``summary`` carries the card's progress *after* the
+    submission so a client needn't re-fetch it.
+
+    The ``zg_*`` and ``hedera_*`` fields are what make an approval checkable rather than
+    merely asserted: the attested inference that judged the receipt, and where that punch
+    landed on the venue's public ledger. Both are null until those layers are configured.
+    """
+
+    punch_event_id: Optional[UUID] = None
+    status: PunchEventStatus
+    approved: bool
+    reason: Optional[str] = None
+    notes: Optional[str] = None
+    confidence: Optional[float] = None
+    summary: Optional[PunchCardSummaryResponse] = None
+
+    zg_request_id: Optional[str] = None
+    zg_tee_verified: Optional[bool] = None
+    hedera_topic_sequence_number: Optional[int] = None
+    hedera_consensus_timestamp: Optional[str] = None
 
     class Config:
         json_encoders = {UUID: str}
