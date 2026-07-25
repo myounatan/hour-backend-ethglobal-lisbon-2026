@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 from sqlmodel import Field, Relationship, UniqueConstraint
 
-from hour_rewards.base import TimestampedModel, value_enum
+from hour_rewards.base import LedgerProofModel, TimestampedModel, value_enum
 
 if TYPE_CHECKING:
     from hour_rewards.host_models import UserImage
@@ -19,7 +19,7 @@ class PunchEventStatus(str, enum.Enum):
     REJECTED = "rejected"
 
 
-class PunchEvent(TimestampedModel, table=True):
+class PunchEvent(LedgerProofModel, TimestampedModel, table=True):
     """One receipt a user submitted towards a punch card, verified or not.
 
     Punches are earned by photographing a venue receipt, not granted by owners: an AI
@@ -34,6 +34,9 @@ class PunchEvent(TimestampedModel, table=True):
 
     The host app owns the image table this points at, so it is responsible for importing
     its ``UserImage`` model somewhere before the first query (see README, "Host contract").
+
+    A verified punch is also published to its venue's HCS topic and reflected in the card
+    NFT's metadata; the ``hedera_*`` columns from :class:`LedgerProofModel` record where.
     """
 
     __tablename__ = "punch_events"

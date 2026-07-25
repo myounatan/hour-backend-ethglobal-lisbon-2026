@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional
 from uuid import UUID, uuid4
 
 from sqlmodel import Field, Relationship, SQLModel, UniqueConstraint
@@ -41,6 +41,12 @@ class PunchCard(TimestampedModel, PunchCardBase, table=True):
 
     cycle_number: int = Field(default=1)
     punch_count: int = Field(default=0)
+
+    # Hedera (optional; null until the ledger layer is configured -- see hour_rewards.hedera).
+    # The serial minted for this card in its venue's collection. Minted once, on the first
+    # verified punch, then carried across every cycle: redeeming updates the NFT's metadata
+    # rather than burning and re-minting, mirroring how the card row itself survives a reset.
+    hedera_nft_serial: Optional[int] = Field(default=None)
 
     # Relationships
     user: "User" = Relationship(back_populates="punch_cards")

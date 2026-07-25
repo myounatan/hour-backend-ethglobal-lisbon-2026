@@ -17,13 +17,18 @@ class PunchCardSummaryResponse(BaseModel):
     """A user's live progress on one venue's punch card.
 
     Mirrors ``PunchCardSummary`` in the companion ``hour-rewards-ui`` package field for
-    field, so a host's API layer can serialize this directly for the mobile client.
+    field, so a host's API layer can serialize this directly for the mobile client. The
+    ``hedera_*`` fields are null until the card has been minted (see
+    :mod:`hour_rewards.hedera`), and are what let a client link a card to its NFT.
     """
 
     venue_id: UUID
     punches_earned: int
     punches_required: int
     reward_description: str
+    hedera_token_id: Optional[str] = None
+    hedera_nft_serial: Optional[int] = None
+    hedera_explorer_url: Optional[str] = None
 
     class Config:
         json_encoders = {UUID: str}

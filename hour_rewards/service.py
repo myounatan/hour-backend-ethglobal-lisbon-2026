@@ -7,6 +7,12 @@ venue's owner, resolving the current user, etc.) are the host's job and must hap
 *before* calling these methods; the one exception is :meth:`RewardService.redeem_code`,
 which needs the code's venue resolved first so the host can run that check -- see
 :meth:`RewardService.get_redemption_code_venue_id`.
+
+The three methods that change a card's on-chain story -- opting a venue in, banking a
+verified punch, and honouring a code -- also mirror themselves onto Hedera via
+:class:`hour_rewards.hedera.HederaLedger`. Those calls are no-ops until a host configures
+the ledger, and they never raise: the database result is returned whether or not the
+network agreed. See :mod:`hour_rewards.hedera`.
 """
 
 import secrets
@@ -17,6 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from hour_rewards.base import utc_now
+from hour_rewards.hedera.config import get_hedera_config
+from hour_rewards.hedera.ledger import HederaLedger
 from hour_rewards.models.punch_card import PunchCard
 from hour_rewards.models.punch_event import PunchEvent, PunchEventStatus
 from hour_rewards.models.responses import (
@@ -59,9 +67,7 @@ class RewardService:
         session: AsyncSession, create_model: RewardProgramCreate
     ) -> RewardProgram:
         """Opt a venue in, or update its config if it's already opted in."""
-        program = await RewardService.get_reward_program_for_venue(
-            session, create_model.venue_id
-        )
+        program = await RewardService.get_reward_program_for_venue(session, create_model.venue_id)
         if program is None:
             program = RewardProgram(**create_model.model_dump())
             session.add(program)
@@ -71,7 +77,8 @@ class RewardService:
             program.updated_at = utc_now()
         await session.commit()
         await session.refresh(program)
-        return program
+        # Opting in is what gives a venue its NFT collection and punch topic.
+        return await HederaLedger.ensure_program_ledger(session, program)
 
     @staticmethod
     async def update_reward_program(
@@ -112,11 +119,18 @@ class RewardService:
         if program is None or not program.is_enabled:
             return None
         card = await RewardService.get_or_create_punch_card(session, user_id, venue_id)
+        config = get_hedera_config()
+        explorer_url = None
+        if config is not None and program.hedera_token_id and card.hedera_nft_serial is not None:
+            explorer_url = config.hashscan_nft_url(program.hedera_token_id, card.hedera_nft_serial)
         return PunchCardSummaryResponse(
             venue_id=venue_id,
             punches_earned=card.punch_count,
             punches_required=program.punches_required,
             reward_description=program.reward_description,
+            hedera_token_id=program.hedera_token_id,
+            hedera_nft_serial=card.hedera_nft_serial,
+            hedera_explorer_url=explorer_url,
         )
 
     @staticmethod
@@ -158,8 +172,15 @@ class RewardService:
         return events
 
     @staticmethod
-    async def record_verified_punch(session: AsyncSession, punch_card_id: UUID) -> PunchCard:
-        """Bump a card's punch count. Called once a ``PunchEvent`` is marked ``VERIFIED``."""
+    async def record_verified_punch(
+        session: AsyncSession, punch_card_id: UUID, punch_event_id: Optional[UUID] = None
+    ) -> PunchCard:
+        """Bump a card's punch count. Called once a ``PunchEvent`` is marked ``VERIFIED``.
+
+        Pass the ``PunchEvent`` this punch came from to have its identifier and receipt
+        hash published alongside the punch on the venue's Hedera topic, and the resulting
+        references written back onto that row.
+        """
         card = await session.get(PunchCard, punch_card_id)
         if card is None:
             raise RewardServiceError(f"Punch card {punch_card_id} not found")
@@ -167,7 +188,11 @@ class RewardService:
         card.updated_at = utc_now()
         await session.commit()
         await session.refresh(card)
-        return card
+
+        punch_event = (
+            await session.get(PunchEvent, punch_event_id) if punch_event_id is not None else None
+        )
+        return await HederaLedger.record_punch(session, card, punch_event)
 
     @staticmethod
     async def generate_redemption_code(
@@ -262,4 +287,7 @@ class RewardService:
 
         await session.commit()
         await session.refresh(redemption)
+        await session.refresh(card)
+        # Publishes the claim and repoints the card's NFT at its now-empty next cycle.
+        await HederaLedger.record_redemption(session, card, redemption)
         return redemption

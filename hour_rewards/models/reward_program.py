@@ -43,6 +43,12 @@ class RewardProgram(TimestampedModel, RewardProgramBase, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     venue_id: UUID = Field(foreign_key="venues.id", ondelete="CASCADE")
 
+    # Hedera (optional; null until the ledger layer is configured -- see hour_rewards.hedera).
+    # The venue's own HTS NFT collection, one serial per user's card, and the HCS topic its
+    # punches and redemptions are logged to.
+    hedera_token_id: Optional[str] = Field(default=None, max_length=64)
+    hedera_topic_id: Optional[str] = Field(default=None, max_length=64)
+
     # Relationships
     venue: "Venue" = Relationship(back_populates="reward_program")
 
@@ -63,6 +69,8 @@ class RewardProgramResponse(BaseModel):
     punches_required: int
     reward_description: str
     is_enabled: bool
+    hedera_token_id: Optional[str] = None
+    hedera_topic_id: Optional[str] = None
 
     class Config:
         json_encoders = {UUID: str}

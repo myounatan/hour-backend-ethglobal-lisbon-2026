@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
-from typing import Type
+from typing import Optional, Type
 
 from sqlalchemy import Enum as SAEnum
 from sqlmodel import TIMESTAMP, Field, SQLModel
@@ -16,6 +16,21 @@ class TimestampedModel(SQLModel):
 
     created_at: datetime = Field(sa_type=TIMESTAMP, default_factory=utc_now)
     updated_at: datetime = Field(sa_type=TIMESTAMP, default_factory=utc_now)
+
+
+class LedgerProofModel(SQLModel):
+    """Where a row was mirrored on Hedera, for the rows that are worth proving.
+
+    All three stay null when the Hedera layer isn't configured, or when a submission
+    failed -- the ledger mirrors the database, it never gates it. See
+    :mod:`hour_rewards.hedera` for what gets published where.
+    """
+
+    # Position of this row's message on its venue's HCS punch ledger.
+    hedera_topic_sequence_number: Optional[int] = Field(default=None)
+    hedera_consensus_timestamp: Optional[str] = Field(default=None, max_length=64)
+    # The TokenUpdateNftsTransaction that moved the card NFT to the state this row created.
+    hedera_metadata_tx_id: Optional[str] = Field(default=None, max_length=128)
 
 
 def value_enum(enum_class: Type[PyEnum]) -> SAEnum:

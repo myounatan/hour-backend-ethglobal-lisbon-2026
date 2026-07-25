@@ -17,11 +17,15 @@ in the host while the schema itself lives here::
 
 Tables are created parent-first (reward_programs -> punch_cards -> punch_events /
 reward_redemption_codes -> reward_redemptions) since each references the previous one.
+The Hedera columns and the custodial ``hedera_accounts`` table are a separate pair of
+operations (:func:`upgrade_hedera` / :func:`downgrade_hedera`), so a host can adopt the
+punch cards without the ledger.
 Requires the ``migrations`` extra: ``pip install hour-rewards-sdk[migrations]``.
 """
 
-import sqlalchemy as sa
+from typing import List
 
+import sqlalchemy as sa
 from alembic import op
 
 REWARD_PROGRAMS = "reward_programs"
@@ -29,6 +33,11 @@ PUNCH_CARDS = "punch_cards"
 PUNCH_EVENTS = "punch_events"
 REDEMPTION_CODES = "reward_redemption_codes"
 REDEMPTIONS = "reward_redemptions"
+HEDERA_ACCOUNTS = "hedera_accounts"
+
+# The proof columns from `hour_rewards.base.LedgerProofModel`, on every table that records
+# where one of its rows landed on Hedera.
+LEDGER_PROOF_COLUMNS = (PUNCH_EVENTS, REDEMPTIONS)
 
 # Stored as VARCHAR sized to the longest value (native_enum=False), matching the
 # `value_enum(...)` columns on the SQLModel side.
@@ -188,3 +197,89 @@ def downgrade() -> None:
     for table in (REDEMPTIONS, REDEMPTION_CODES, PUNCH_EVENTS, PUNCH_CARDS, REWARD_PROGRAMS):
         if inspector.has_table(table):
             op.drop_table(table)
+
+
+def _existing_columns(inspector: sa.Inspector, table: str) -> List[str]:
+    if not inspector.has_table(table):
+        return []
+    return [column["name"] for column in inspector.get_columns(table)]
+
+
+def upgrade_hedera() -> None:
+    """Add the custodial account table and the Hedera reference columns.
+
+    Every column is nullable: a card that predates the ledger, or one whose submission
+    failed, stays valid with these empty. See :mod:`hour_rewards.hedera`.
+    """
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+
+    if not inspector.has_table(HEDERA_ACCOUNTS):
+        op.create_table(
+            HEDERA_ACCOUNTS,
+            sa.Column("id", sa.UUID(), nullable=False),
+            sa.Column("user_id", sa.UUID(), nullable=False),
+            sa.Column("network", sa.String(length=32), nullable=False),
+            sa.Column("account_id", sa.String(length=64), nullable=False),
+            sa.Column("public_key", sa.String(length=256), nullable=False),
+            sa.Column("encrypted_private_key", sa.String(), nullable=False),
+            sa.Column("created_at", sa.TIMESTAMP(), nullable=False),
+            sa.Column("updated_at", sa.TIMESTAMP(), nullable=False),
+            sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+            sa.PrimaryKeyConstraint("id"),
+            sa.UniqueConstraint("user_id", name="uq_hedera_accounts_user_id"),
+        )
+
+    program_columns = _existing_columns(inspector, REWARD_PROGRAMS)
+    if "hedera_token_id" not in program_columns:
+        op.add_column(
+            REWARD_PROGRAMS, sa.Column("hedera_token_id", sa.String(length=64), nullable=True)
+        )
+    if "hedera_topic_id" not in program_columns:
+        op.add_column(
+            REWARD_PROGRAMS, sa.Column("hedera_topic_id", sa.String(length=64), nullable=True)
+        )
+
+    if "hedera_nft_serial" not in _existing_columns(inspector, PUNCH_CARDS):
+        op.add_column(PUNCH_CARDS, sa.Column("hedera_nft_serial", sa.Integer(), nullable=True))
+
+    for table in LEDGER_PROOF_COLUMNS:
+        columns = _existing_columns(inspector, table)
+        if "hedera_topic_sequence_number" not in columns:
+            op.add_column(
+                table, sa.Column("hedera_topic_sequence_number", sa.Integer(), nullable=True)
+            )
+        if "hedera_consensus_timestamp" not in columns:
+            op.add_column(
+                table, sa.Column("hedera_consensus_timestamp", sa.String(length=64), nullable=True)
+            )
+        if "hedera_metadata_tx_id" not in columns:
+            op.add_column(
+                table, sa.Column("hedera_metadata_tx_id", sa.String(length=128), nullable=True)
+            )
+
+
+def downgrade_hedera() -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+
+    for table in LEDGER_PROOF_COLUMNS:
+        columns = _existing_columns(inspector, table)
+        for column in (
+            "hedera_topic_sequence_number",
+            "hedera_consensus_timestamp",
+            "hedera_metadata_tx_id",
+        ):
+            if column in columns:
+                op.drop_column(table, column)
+
+    if "hedera_nft_serial" in _existing_columns(inspector, PUNCH_CARDS):
+        op.drop_column(PUNCH_CARDS, "hedera_nft_serial")
+
+    program_columns = _existing_columns(inspector, REWARD_PROGRAMS)
+    for column in ("hedera_token_id", "hedera_topic_id"):
+        if column in program_columns:
+            op.drop_column(REWARD_PROGRAMS, column)
+
+    if inspector.has_table(HEDERA_ACCOUNTS):
+        op.drop_table(HEDERA_ACCOUNTS)

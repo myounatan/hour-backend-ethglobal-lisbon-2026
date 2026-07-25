@@ -3,14 +3,14 @@ from uuid import UUID, uuid4
 
 from sqlmodel import Field, Relationship
 
-from hour_rewards.base import TimestampedModel
+from hour_rewards.base import LedgerProofModel, TimestampedModel
 
 if TYPE_CHECKING:
     from hour_rewards.host_models import Owner
     from hour_rewards.models.punch_card import PunchCard
 
 
-class RewardRedemption(TimestampedModel, table=True):
+class RewardRedemption(LedgerProofModel, TimestampedModel, table=True):
     """A completed punch card cycle that a venue owner scanned and honoured.
 
     ``created_at`` is the redemption time. ``venue_id`` and ``user_id`` are

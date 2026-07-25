@@ -1,3 +1,4 @@
+from hour_rewards.models.hedera_account import HederaAccount, HederaAccountResponse
 from hour_rewards.models.punch_card import PunchCard, PunchCardBase
 from hour_rewards.models.punch_event import PunchEvent, PunchEventStatus
 from hour_rewards.models.responses import (
@@ -21,6 +22,8 @@ from hour_rewards.models.reward_redemption_code import (
 )
 
 __all__ = [
+    "HederaAccount",
+    "HederaAccountResponse",
     "PunchCard",
     "PunchCardBase",
     "PunchCardSummaryResponse",

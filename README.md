@@ -17,6 +17,9 @@ pip install git+https://github.com/myounatan/hour-backend-ethglobal-lisbon-2026.
 
 # with the Alembic helpers for creating the tables
 pip install "hour-rewards-sdk[migrations] @ git+https://github.com/myounatan/hour-backend-ethglobal-lisbon-2026.git"
+
+# with the Hedera layer (adds hiero-sdk-python)
+pip install "hour-rewards-sdk[migrations,hedera] @ git+https://github.com/myounatan/hour-backend-ethglobal-lisbon-2026.git"
 ```
 
 ## The model
@@ -32,6 +35,7 @@ from hour_rewards.models import PunchCard, PunchEvent, PunchEventStatus, RewardP
 | `punch_events` | One receipt submission, `PENDING_REVIEW` until the AI pipeline verifies it |
 | `reward_redemption_codes` | QR tokens issued for a full card, valid while `PENDING` and in-cycle |
 | `reward_redemptions` | Completed claims, snapshotting the program's terms at redemption time |
+| `hedera_accounts` | The custodial Hedera account holding one user's card NFTs (Hedera layer only) |
 
 Three decisions are worth knowing before you build on it:
 
@@ -67,6 +71,74 @@ your own authorization check, then call `redeem_code`.
 `RewardServiceError` (a `ValueError`) is raised for rule violations: an under-threshold
 card, an already-redeemed or wrong-cycle code, a missing program. Hosts typically map it
 to a 409 Conflict.
+
+## Hedera
+
+Punch cards are also real assets: a venue that opts in gets **its own HTS NFT collection**,
+each user's card is **one serial in it**, and every punch and claim is **published to that
+venue's HCS topic**. Native services only — no Solidity, no smart contracts — via
+[`hiero-sdk-python`](https://github.com/hiero-ledger/hiero-sdk-python).
+
+| Moment | On Hedera |
+| --- | --- |
+| Venue opts in | `TokenCreateTransaction` (NFT collection, metadata key set) + `TopicCreateTransaction` |
+| User's first punch | `AccountCreateTransaction` (custodial) + `TokenMintTransaction` + `TransferTransaction` |
+| Each verified punch | `TopicMessageSubmitTransaction` + `TokenUpdateNftsTransaction` |
+| Reward claimed | `TopicMessageSubmitTransaction` + `TokenUpdateNftsTransaction` (next cycle) |
+
+Four decisions worth knowing:
+
+- **The card NFT is minted once, not per cycle.** Redeeming rewrites its metadata via
+  HIP-657's metadata key, so one durable card accrues a venue's whole history — the same
+  reasoning as `cycle_number` incrementing in place rather than replacing the row.
+- **Metadata is a URI, not a document.** HIP-657 caps on-chain metadata at 100 bytes, so
+  the minted bytes point at the host's API (`{metadata_base_url}/{card_id}?v={cycle}-{count}`)
+  and `build_card_metadata()` serves HIP-412 JSON from the live card. The version in the
+  query string means each state change is its own signed transaction rather than a silent
+  edit behind a stable pointer.
+- **Users are custodial, and their identifiers aren't published.** Punch-card users sign in
+  with Google or Apple and bring no wallet, so an account is created for them on first punch
+  and its key stored Fernet-encrypted in `hedera_accounts`. Topic messages carry a salted
+  hash of the user id, never the id itself.
+- **The ledger mirrors the database; it never gates it.** Every call is best-effort: a
+  failure is logged, the `hedera_*` columns stay null, and the next punch retries what's
+  missing. A Hedera outage cannot fail a punch or a redemption.
+
+A host enables it by handing over credentials once at startup; nothing here reads the
+host's environment:
+
+```python
+from hour_rewards.hedera import HederaConfig, close_hedera_clients, configure_hedera
+
+configure_hedera(
+    HederaConfig.build(
+        operator_id=settings.HEDERA_OPERATOR_ID,          # pays and signs; treasury of every collection
+        operator_key=settings.HEDERA_OPERATOR_KEY,
+        metadata_base_url=settings.HEDERA_METADATA_BASE_URL,  # must leave the URI under 100 bytes
+        key_encryption_secret=settings.HEDERA_KEY_ENCRYPTION_SECRET,
+        network="testnet",
+    )
+)
+...
+close_hedera_clients()  # on shutdown
+```
+
+`HederaConfig.build` returns `None` when any credential is missing, and `configure_hedera(None)`
+leaves the layer dormant — which is how the punch cards stay fully usable, tests included,
+with no Hedera account at all.
+
+The host also serves the metadata URI it configured, using the payload this package builds:
+
+```python
+@router.get("/rewards/nft/{punch_card_id}")
+async def punch_card_nft_metadata(punch_card_id: UUID, db: DBSession) -> dict:
+    return await build_card_metadata(db, punch_card_id) or {}
+```
+
+`RewardService` calls the ledger for you: opting a venue in creates its collection and topic,
+`record_verified_punch` mints the card on the first punch and then publishes each one, and
+`redeem_code` publishes the claim. `HederaLedger` is available directly if a host wants to
+drive it itself.
 
 ## Host contract
 
@@ -116,8 +188,11 @@ def downgrade() -> None:
     rewards_downgrade()
 ```
 
-Both operations check for each table before touching it, so they are safe to run against
-a database where the schema was built straight from the models.
+The Hedera table and columns are a second pair, `upgrade_hedera` / `downgrade_hedera`, so a
+host can take the punch cards without the ledger.
+
+Every operation checks for each table and column before touching it, so they are safe to run
+against a database where the schema was built straight from the models.
 
 ## Licence
 
