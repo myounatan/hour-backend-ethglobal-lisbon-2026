@@ -82,19 +82,32 @@ async def verify_receipt(
     receipt_text: str,
     *,
     venue_address: Optional[str] = None,
+    dedupe_scope_id: Optional[UUID] = None,
 ) -> ReceiptVerdict:
-    """Read one receipt's OCR text and decide whether it earns a punch at this venue."""
+    """Read one receipt's OCR text and decide whether it earns a punch at this venue.
+
+    ``dedupe_scope_id`` is passed straight through to :func:`hour_rewards.zg.receipt.
+    receipt_dedupe_hash` -- see its docstring. Leave it unset outside of a demo.
+    """
     config = get_zg_config()
     if config is None:
         return _unavailable(
-            venue_id, receipt_text, notes="0G verification is not configured on this host."
+            venue_id,
+            receipt_text,
+            dedupe_scope_id=dedupe_scope_id,
+            notes="0G verification is not configured on this host.",
         )
 
     try:
         payload, trace = await ask_router(config, venue_name, receipt_text, venue_address)
     except Exception as error:
         logger.warning("0G receipt verification failed for venue %s: %s", venue_id, error)
-        return _unavailable(venue_id, receipt_text, notes=f"0G Router call failed: {error}")
+        return _unavailable(
+            venue_id,
+            receipt_text,
+            dedupe_scope_id=dedupe_scope_id,
+            notes=f"0G Router call failed: {error}",
+        )
 
     return build_verdict(
         payload,
@@ -103,6 +116,7 @@ async def verify_receipt(
         receipt_text=receipt_text,
         min_confidence=config.min_confidence,
         trace=trace,
+        dedupe_scope_id=dedupe_scope_id,
     )
 
 
@@ -114,6 +128,7 @@ def build_verdict(
     receipt_text: str,
     min_confidence: float,
     trace: Optional[Dict[str, Any]] = None,
+    dedupe_scope_id: Optional[UUID] = None,
 ) -> ReceiptVerdict:
     """Turn the model's JSON into a filing decision, guards and all.
 
@@ -155,6 +170,7 @@ def build_verdict(
         notes=_clean_notes(payload.get("notes")),
         dedupe_hash=receipt_dedupe_hash(
             venue_id,
+            dedupe_scope_id=dedupe_scope_id,
             receipt_identifier=receipt_identifier,
             receipt_date=receipt_date,
             receipt_total=receipt_total,
@@ -310,13 +326,21 @@ def _response_key(response_id: Optional[str]) -> Optional[str]:
     return response_id.removeprefix(_RESPONSE_ID_PREFIX) or None
 
 
-def _unavailable(venue_id: UUID, receipt_text: str, *, notes: str) -> ReceiptVerdict:
+def _unavailable(
+    venue_id: UUID,
+    receipt_text: str,
+    *,
+    notes: str,
+    dedupe_scope_id: Optional[UUID] = None,
+) -> ReceiptVerdict:
     """A submission nobody could judge: refused, and hashed on its own text."""
     return ReceiptVerdict(
         status=PunchEventStatus.REJECTED,
         rejection_reason=VERIFIER_UNAVAILABLE,
         notes=notes,
-        dedupe_hash=receipt_dedupe_hash(venue_id, receipt_text=receipt_text),
+        dedupe_hash=receipt_dedupe_hash(
+            venue_id, dedupe_scope_id=dedupe_scope_id, receipt_text=receipt_text
+        ),
     )
 
 

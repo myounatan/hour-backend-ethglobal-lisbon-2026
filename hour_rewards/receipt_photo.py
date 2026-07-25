@@ -107,6 +107,7 @@ async def submit_receipt_photo(
     user_id: UUID,
     venue_id: UUID,
     image: bytes,
+    dedupe_scope_id: Optional[UUID] = None,
 ) -> ReceiptSubmissionResponse:
     """Read a photographed receipt and claim a punch with it at ``venue_id``.
 
@@ -114,6 +115,10 @@ async def submit_receipt_photo(
     way, punch or refusal, comes back as a response; the exceptions are the two cases that are
     not judgements on the receipt -- an upload that was never a photo
     (:class:`ReceiptImageError`) and OCR that could not read one (:class:`ReceiptScanError`).
+
+    ``dedupe_scope_id`` is passed straight through to
+    :meth:`hour_rewards.service.RewardService.submit_receipt` -- see its docstring. Leave it
+    unset outside of a demo.
     """
     validate_receipt_image(image)
 
@@ -128,4 +133,6 @@ async def submit_receipt_photo(
     except Exception as error:
         raise ReceiptScanError(f"Could not read the receipt photo: {error}") from error
 
-    return await RewardService.submit_receipt(session, user_id, venue_id, receipt_text)
+    return await RewardService.submit_receipt(
+        session, user_id, venue_id, receipt_text, dedupe_scope_id=dedupe_scope_id
+    )

@@ -217,7 +217,10 @@ that verdict is reached:
 - **A verified receipt is single-use per venue.** `punch_events.dedupe_hash` is built from the
   receipt's own number, or its date and total when it has no number. A partial unique index
   applies it to verified rows, so a receipt cannot earn a second punch or be claimed from a
-  second account, while a refused attempt can be retried.
+  second account, while a refused attempt can be retried. A host can narrow "single-use per
+  venue" down to "single-use per venue, per caller" by passing `dedupe_scope_id` into
+  `submit_receipt`/`submit_receipt_photo`/`verify_receipt` (e.g. the submitting `user_id`) --
+  meant for demoing the product with one shared sample receipt, never for production traffic.
 
 A host enables it the same way as the ledger, once at startup, and nothing here reads the
 host's environment:

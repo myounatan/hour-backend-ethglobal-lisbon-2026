@@ -282,6 +282,29 @@ def test_unreadable_submissions_fall_back_to_their_text_instead_of_colliding():
     assert first != second
 
 
+def test_dedupe_scope_id_is_a_no_op_when_left_unset():
+    """The demo-only parameter must not change hashing for every other caller."""
+    venue_id = uuid4()
+    fields = {"receipt_date": datetime(2026, 7, 24, 19, 12), "receipt_total": Decimal("48.60")}
+    assert receipt_dedupe_hash(venue_id, **fields) == receipt_dedupe_hash(
+        venue_id, dedupe_scope_id=None, **fields
+    )
+
+
+def test_dedupe_scope_id_lets_the_same_receipt_be_claimed_once_per_scope():
+    """A host demoing with one sample receipt: same photo, different scope, no collision."""
+    venue_id = uuid4()
+    first_user, second_user = uuid4(), uuid4()
+    fields = {"receipt_date": datetime(2026, 7, 24, 19, 12), "receipt_total": Decimal("48.60")}
+
+    first = receipt_dedupe_hash(venue_id, dedupe_scope_id=first_user, **fields)
+    second = receipt_dedupe_hash(venue_id, dedupe_scope_id=second_user, **fields)
+    again_for_first = receipt_dedupe_hash(venue_id, dedupe_scope_id=first_user, **fields)
+
+    assert first != second  # different judges, same receipt: both go through
+    assert first == again_for_first  # same judge, same receipt: still a duplicate
+
+
 def test_the_prompt_states_its_guards_and_the_user_message_carries_the_venue():
     for reason in (NOT_A_RECEIPT, VENUE_MISMATCH):
         assert reason in SYSTEM_PROMPT

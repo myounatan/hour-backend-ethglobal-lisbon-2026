@@ -177,6 +177,7 @@ def decide_status(
 def receipt_dedupe_hash(
     venue_id: UUID,
     *,
+    dedupe_scope_id: Optional[UUID] = None,
     receipt_identifier: Optional[str] = None,
     receipt_date: Optional[datetime] = None,
     receipt_total: Optional[Decimal] = None,
@@ -190,6 +191,11 @@ def receipt_dedupe_hash(
     for it. Neither available -- an unreadable photo, refused -- falls back to the text
     itself, so two rejected submissions don't collide on an empty hash and get reported as
     duplicates of each other.
+
+    ``dedupe_scope_id`` narrows that "single-use at a venue" down to "single-use at a venue
+    *for this caller*" -- meant for a host demoing the product with one shared sample receipt
+    (a hackathon judge, a sales walkthrough), never for production traffic. Omitted, this is
+    unchanged from before the parameter existed.
     """
     if receipt_identifier:
         parts = ["id", normalize_for_match(receipt_identifier)]
@@ -201,7 +207,8 @@ def receipt_dedupe_hash(
         ]
     else:
         parts = ["text", normalize_for_match(receipt_text)]
-    return hashlib.sha256("|".join([str(venue_id), *parts]).encode()).hexdigest()
+    scope = [str(dedupe_scope_id)] if dedupe_scope_id else []
+    return hashlib.sha256("|".join([str(venue_id), *scope, *parts]).encode()).hexdigest()
 
 
 def parse_total(value: Any) -> Optional[Decimal]:

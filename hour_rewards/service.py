@@ -290,6 +290,7 @@ class RewardService:
         receipt_text: str,
         *,
         receipt_image_id: Optional[UUID] = None,
+        dedupe_scope_id: Optional[UUID] = None,
     ) -> ReceiptSubmissionResponse:
         """Claim a punch with a photographed receipt, already read into text by the host.
 
@@ -309,6 +310,12 @@ class RewardService:
         Refused receipts are filed but retain their second chance, while a verifier that
         could not answer is not filed at all. Nothing here raises for a refusal; read
         ``approved`` and ``reason``.
+
+        ``dedupe_scope_id``, passed straight through to :func:`hour_rewards.zg.verify_receipt`,
+        narrows "single-use at this venue" down to "single-use at this venue for this scope" --
+        a host demoing the product may pass ``user_id`` here so one sample receipt photo can be
+        reused once per demo account instead of being spent venue-wide. Leave unset in
+        production: it exists to be flipped on for a demo, not to run all the time.
         """
         program = await RewardService.get_reward_program_for_venue(session, venue_id)
         if not RewardService.is_program_active(program):
@@ -317,7 +324,13 @@ class RewardService:
         card = await RewardService.get_or_create_punch_card(session, user_id, venue_id)
         name = await venue_name(session, venue_id)
         address = await venue_address(session, venue_id)
-        verdict = await verify_receipt(venue_id, name, receipt_text, venue_address=address)
+        verdict = await verify_receipt(
+            venue_id,
+            name,
+            receipt_text,
+            venue_address=address,
+            dedupe_scope_id=dedupe_scope_id,
+        )
 
         if verdict.rejection_reason in RETRYABLE_REJECTION_REASONS:
             return await RewardService._submission_response(
