@@ -233,6 +233,15 @@ class RewardService:
         return events
 
     @staticmethod
+    async def get_event_proof(
+        session: AsyncSession, user_id: UUID, venue_id: UUID, event_id: UUID
+    ):
+        """Return technical proof for one history event owned by this user."""
+        from hour_rewards.proofs import build_event_proof
+
+        return await build_event_proof(session, user_id, venue_id, event_id)
+
+    @staticmethod
     async def _verified_punch_count(session: AsyncSession, card: PunchCard) -> int:
         """The card's real progress: its verified punches in the cycle it's on now."""
         result = await session.execute(

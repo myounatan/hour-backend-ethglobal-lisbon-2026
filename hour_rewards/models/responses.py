@@ -1,6 +1,6 @@
 import enum
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, Optional
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -44,6 +44,71 @@ class RewardHistoryEventResponse(BaseModel):
     id: UUID
     type: RewardHistoryEventType
     occurred_at: datetime
+
+    class Config:
+        json_encoders = {UUID: str}
+
+
+class HederaProofResponse(BaseModel):
+    """Stored and live Hedera references for a reward history event."""
+
+    network: Optional[str] = None
+    topic_id: Optional[str] = None
+    topic_sequence_number: Optional[int] = None
+    consensus_timestamp: Optional[str] = None
+    metadata_transaction_id: Optional[str] = None
+    token_id: Optional[str] = None
+    nft_serial: Optional[int] = None
+    nft_account_id: Optional[str] = None
+    topic_url: Optional[str] = None
+    nft_url: Optional[str] = None
+    metadata_transaction_url: Optional[str] = None
+    account_url: Optional[str] = None
+    message: Optional[Dict[str, Any]] = None
+    mirror_node_url: Optional[str] = None
+    message_error: Optional[str] = None
+
+
+class ZgProofResponse(BaseModel):
+    """Stored 0G Compute trace and the result of re-reading its public attestation."""
+
+    request_id: Optional[str] = None
+    provider_address: Optional[str] = None
+    tee_verified: Optional[bool] = None
+    signing_address: Optional[str] = None
+    enclave_signer: Optional[str] = None
+    tee_verified_live: Optional[bool] = None
+    signature: Optional[str] = None
+    signature_url: Optional[str] = None
+    error: Optional[str] = None
+
+
+class ReceiptProofResponse(BaseModel):
+    dedupe_hash: str
+    receipt_identifier: Optional[str] = None
+    receipt_date: Optional[datetime] = None
+    receipt_total_amount: Optional[float] = None
+    ai_confidence_score: Optional[float] = None
+    status: PunchEventStatus
+
+
+class RedemptionProofResponse(BaseModel):
+    reward_description: str
+    punches_required: int
+    cycle_number: int
+
+
+class RewardProofResponse(BaseModel):
+    """Technical evidence for one user-owned punch or redemption history row."""
+
+    id: UUID
+    type: RewardHistoryEventType
+    occurred_at: datetime
+    cycle_number: int
+    hedera: HederaProofResponse
+    zg: Optional[ZgProofResponse] = None
+    receipt: Optional[ReceiptProofResponse] = None
+    redemption: Optional[RedemptionProofResponse] = None
 
     class Config:
         json_encoders = {UUID: str}

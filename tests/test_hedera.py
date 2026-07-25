@@ -6,6 +6,8 @@ writing references back) is exercised by the host app's ``test_reward_hedera.py`
 needs the host's ``users``/``venues`` tables -- same split as ``test_reward_service.py``.
 """
 
+import base64
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -15,6 +17,7 @@ from hour_rewards.hedera import HederaConfig, HederaLedger, configure_hedera, ge
 from hour_rewards.hedera.config import MAX_METADATA_BYTES
 from hour_rewards.hedera.keys import decrypt_private_key, encrypt_private_key, ledger_user_ref
 from hour_rewards.hedera.ledger import MESSAGE_VERSION, _card_message
+from hour_rewards.hedera.mirror import _decode_message
 from hour_rewards.hedera.metadata import MetadataTooLargeError, card_metadata_uri
 
 SECRET = "test-secret"
@@ -69,6 +72,27 @@ def test_build_drops_unset_optionals_and_trims_the_base_url(config: HederaConfig
     assert config.metadata_base_url == "https://api.example.com/api/rewards/nft"
     assert config.network == "testnet"
     assert config.operator_key_type == "ecdsa"
+
+
+def test_proof_urls_target_the_configured_network(config: HederaConfig):
+    assert config.mirror_node_base_url == "https://testnet.mirrornode.hedera.com"
+    assert config.hashscan_transaction_url("0.0.123@1.2") == (
+        "https://hashscan.io/testnet/transaction/0.0.123@1.2"
+    )
+    assert config.hashscan_account_url("0.0.123") == "https://hashscan.io/testnet/account/0.0.123"
+
+
+def test_mirror_message_decoder_returns_the_signed_json_object():
+    encoded = base64.b64encode(json.dumps({"event": "abc", "type": "punch"}).encode()).decode()
+
+    assert _decode_message(encoded) == {"event": "abc", "type": "punch"}
+
+
+def test_mirror_message_decoder_refuses_non_object_payloads():
+    encoded = base64.b64encode(json.dumps(["not", "a", "proof"]).encode()).decode()
+
+    with pytest.raises(ValueError, match="JSON object"):
+        _decode_message(encoded)
 
 
 def test_metadata_key_falls_back_to_the_operator_key(config: HederaConfig):

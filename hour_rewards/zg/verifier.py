@@ -235,22 +235,41 @@ def _trace(headers: Any, response: Any) -> Dict[str, Any]:
 async def _attestation(config: ZGConfig, request_id: str) -> Dict[str, Any]:
     """Whether an attested enclave signed this response, as ``{"tee_verified": bool}``.
 
+    This preserves the compact trace persisted when a receipt is submitted. The fuller
+    public proof is available through :func:`fetch_attestation`.
+    """
+    proof = await fetch_attestation(config, request_id)
+    tee_verified = proof.get("tee_verified")
+    return {"tee_verified": tee_verified} if tee_verified is not None else {}
+
+
+async def fetch_attestation(config: ZGConfig, request_id: str) -> Dict[str, Any]:
+    """Read the public 0G proof needed to independently check one inference.
+
     Two public GETs, no API key: the signed receipt for this response, and the node's TDX
     quote. The receipt names the key that signed the response; the quote commits to that same
     key in its ``report_data``. Matching them is the claim -- and both are exactly what anyone
     can redo later from the response key published to Hedera.
 
-    Either fetch failing leaves the flag unset rather than false: nothing was learned about the
-    run, which is not the same as learning it wasn't attested.
+    Missing data is represented as ``None`` rather than ``False``: an unreachable public proof
+    endpoint says nothing about whether the original run was attested.
     """
-    receipt = await _fetch_json(config, signature_url(config, request_id))
+    url = signature_url(config, request_id)
+    proof: Dict[str, Any] = {"signature_url": url}
+    receipt = await _fetch_json(config, url)
     if not receipt or not receipt.get("signature"):
-        return {}
-    signer = str(receipt.get("signing_address") or "").lower()
+        proof["error"] = "0G signature receipt could not be read."
+        return proof
+    signer = str(receipt.get("signing_address") or "").lower() or None
+    proof["signature"] = str(receipt["signature"])
+    proof["signing_address"] = signer
     enclave_signer = await _enclave_signer(config)
+    proof["enclave_signer"] = enclave_signer
     if not signer or enclave_signer is None:
-        return {}
-    return {"tee_verified": signer == enclave_signer}
+        proof["error"] = "0G enclave quote could not be read."
+        return proof
+    proof["tee_verified"] = signer == enclave_signer
+    return proof
 
 
 async def _enclave_signer(config: ZGConfig) -> Optional[str]:

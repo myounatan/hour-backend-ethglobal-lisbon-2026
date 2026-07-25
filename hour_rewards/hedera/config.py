@@ -81,6 +81,16 @@ class HederaConfig:
     def hashscan_topic_url(self, topic_id: str) -> str:
         return f"https://hashscan.io/{self.network}/topic/{topic_id}"
 
+    def hashscan_transaction_url(self, transaction_id: str) -> str:
+        return f"https://hashscan.io/{self.network}/transaction/{transaction_id}"
+
+    def hashscan_account_url(self, account_id: str) -> str:
+        return f"https://hashscan.io/{self.network}/account/{account_id}"
+
+    @property
+    def mirror_node_base_url(self) -> str:
+        return f"https://{self.network}.mirrornode.hedera.com"
+
 
 _config: Optional[HederaConfig] = None
 
